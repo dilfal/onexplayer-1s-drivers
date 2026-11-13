@@ -83,13 +83,23 @@ All'apertura sono selezionati **solo i driver mancanti, in errore o più vecchi*
 
 ### Scheda Gioco
 
-Elenca 25 programmi con categoria, a cosa servono, stato sul PC e avanzamento. Lo stato si legge in background la prima volta che apri la scheda (circa 30 secondi, con `winget export`; Intel Graphics Command Center si controlla come app dello Store), con **`Aggiorna stato`** e alla fine di ogni installazione. Valori: `Analisi...`, `Installato`, `Non installato`, `winget assente`.
+Elenca 26 programmi con categoria, a cosa servono, stato sul PC e avanzamento. Lo stato si legge in background la prima volta che apri la scheda (circa 30 secondi, con `winget export`; Intel Graphics Command Center si controlla come app dello Store), con **`Aggiorna stato`** e alla fine di ogni installazione. Valori: `Analisi...`, `Installato`, `Non installato`, `winget assente` (Winhanced si riconosce dalle voci di disinstallazione di Windows, quindi anche senza winget).
 
 - **`Consigliati`**: seleziona i programmi marcati come consigliati (sono anche quelli selezionati all'avvio): Visual C++ 2015-2022 (x64 e x86), DirectX End-User Runtime, .NET Desktop Runtime 8, Intel Driver & Support Assistant, Intel Graphics Command Center, Steam, Playnite, RivaTuner Statistics Server, 7-Zip e DiskInternals Linux Reader.
 - **`Tutti`** / **`Nessuno`**: seleziona o svuota l'intero elenco.
-- Gli altri programmi (Heroic, GOG Galaxy, Epic, EA app, Ubisoft Connect, MSI Afterburner, HWiNFO, Handheld Companion, ThrottleStop, GeForce NOW, Moonlight, RetroArch, PCSX2, WinBtrfs) sono facoltativi. Handheld Companion non elenca il 1S tra i dispositivi supportati: da provare. ThrottleStop va regolato a mano con cautela.
+- Gli altri programmi (Heroic, GOG Galaxy, Epic, EA app, Ubisoft Connect, MSI Afterburner, HWiNFO, Handheld Companion, ThrottleStop, GeForce NOW, Moonlight, RetroArch, PCSX2, WinBtrfs, Winhanced) sono facoltativi. Handheld Companion non elenca il 1S tra i dispositivi supportati: da provare. ThrottleStop va regolato a mano con cautela.
 
 Premendo **`Installa Programmi Selezionati`** i programmi vengono installati uno alla volta, in ordine, con `winget install --exact --silent`. Se `winget` non c'è, la coda non parte: aggiorna «Programma di installazione app» dal Microsoft Store (sulle edizioni LTSC winget non è incluso e va installato a parte). Un errore su una voce non ferma le altre: nel log compaiono il codice di uscita e le ultime righe dell'output. Al termine appare un riepilogo (completati, errori, percorso del log), **senza richiesta di riavvio**.
+
+**Winhanced** (categoria «Modalità console») è l'unico programma della lista che non passa da winget: non è in winget né nello Store e si scarica dal sito ufficiale (circa 1 GB). Per questo la coda parte anche se winget manca, quando sono selezionate solo voci di questo tipo. Come funziona:
+
+1. L'utility legge la pagina `https://www.winhanced.com/support` e ne ricava l'indirizzo dell'installer (contiene la versione e cambia a ogni rilascio, per questo non è scritto fisso; si accettano solo indirizzi `https://ota.winhanced.com/...`, scegliendo la versione più alta).
+2. Scarica l'installer in `%TEMP%\OXP1S-Drivers\apps\` con avanzamento reale; **Annulla** interrompe il download.
+3. Controlla la firma digitale (Authenticode): **l'installer viene eseguito solo se la firma è valida**; altrimenti viene cancellato, la voce segna «Errore (firma)» e il log riporta stato e firmatario.
+4. Avvia l'installer in modo interattivo: **la procedura è guidata**, completala nella finestra che si apre (non esistono opzioni silenziose documentate). Al termine cancella l'installer scaricato.
+5. Se la pagina non risponde o non contiene l'indirizzo, apre la pagina ufficiale nel browser, segna «Da installare a mano» e lo conta tra gli errori.
+
+Winhanced ha le proprie impostazioni di avvio: l'utility non lo gestisce nel gruppo «Avvio del dispositivo» della scheda Sistema. **Non provato sul 1S:** il controllo dell'hardware (potenza, ventole) vale solo sui dispositivi che Winhanced supporta; il sito cita genericamente «OneXPlayer» senza elencare il 1S, quindi è da provare.
 
 **Grafica aggiornata:** il driver Iris Xe della scheda Driver è quello del produttore. Per tenere aggiornati grafica, Wi-Fi e Bluetooth alle versioni Intel correnti installa **Intel Driver & Support Assistant** da questa scheda.
 

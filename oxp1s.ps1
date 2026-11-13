@@ -524,7 +524,12 @@ $AppDefinitions = @(
     [ordered]@{ Order = 24; Id = 'DiskInternals.LinuxReader'; Source = 'winget'; Name = 'DiskInternals Linux Reader'; Category = 'Dischi Linux'
         Purpose = 'Legge dischi e schede ext2/ext3/ext4 in sola lettura e copia i file su Windows, senza rischio di rovinare il disco'; Recommended = $true },
     [ordered]@{ Order = 25; Id = 'maharmstone.btrfs'; Source = 'winget'; Name = 'WinBtrfs'; Category = 'Dischi Linux'
-        Purpose = 'Fa comparire in Esplora file i dischi btrfs (il formato predefinito di Bazzite), anche in scrittura: usarlo con prudenza'; Recommended = $false }
+        Purpose = 'Fa comparire in Esplora file i dischi btrfs (il formato predefinito di Bazzite), anche in scrittura: usarlo con prudenza'; Recommended = $false },
+    [ordered]@{ Order = 26; Id = 'Winhanced'; Source = 'web'; Name = 'Winhanced'; Category = 'Modalita console'
+        Purpose = 'Interfaccia a schermo intero in stile console che riunisce Steam, Xbox, Epic, GOG ed emulatori; beta gratuita, download di circa 1 GB dal sito ufficiale, installazione con procedura guidata'; Recommended = $false
+        PageUrl = 'https://www.winhanced.com/support'
+        UrlPattern = 'https://ota\.winhanced\.com/[A-Za-z0-9_\-./]*?Winhanced-Installer-(\d+(?:\.\d+){1,4})\.exe'
+        UninstallMatch = '^Winhanced' }
 )
 
 # ---------------------------------------------------------------------------
@@ -1168,8 +1173,8 @@ foreach ($di in $DriverItems) { $di.IsSelected = [bool]$di.NeedsInstall }
                         <DataGrid x:Name="GridApps" Style="{StaticResource DarkGrid}">
                             <DataGrid.Columns>
                                 <DataGridTemplateColumn Header="Sel." Width="46" CellTemplate="{StaticResource SelCheckTemplate}"/>
-                                <DataGridTextColumn Header="Programma" Binding="{Binding Name}" IsReadOnly="True" Width="215" ElementStyle="{StaticResource CellTextWrap}"/>
-                                <DataGridTextColumn Header="Categoria" Binding="{Binding Category}" IsReadOnly="True" Width="95" ElementStyle="{StaticResource CellText}"/>
+                                <DataGridTextColumn Header="Programma" Binding="{Binding Name}" IsReadOnly="True" Width="200" ElementStyle="{StaticResource CellTextWrap}"/>
+                                <DataGridTextColumn Header="Categoria" Binding="{Binding Category}" IsReadOnly="True" Width="118" ElementStyle="{StaticResource CellText}"/>
                                 <DataGridTextColumn Header="A cosa serve" Binding="{Binding Purpose}" IsReadOnly="True" Width="*" ElementStyle="{StaticResource CellTextWrap}"/>
                                 <DataGridTextColumn Header="Stato sul PC" Binding="{Binding SystemStatus}" IsReadOnly="True" Width="115" ElementStyle="{StaticResource CellText}"/>
                                 <DataGridTextColumn Header="Avanzamento" Binding="{Binding RunStatus}" IsReadOnly="True" Width="125" ElementStyle="{StaticResource CellText}"/>
@@ -1455,7 +1460,7 @@ Write-UiLog "Dispositivi PnP con problemi sul sistema: $pnpErrCount"
 # 7b. Funzioni comuni: pulsanti, rilevamento programmi, schermo, touch
 # ---------------------------------------------------------------------------
 $FooterDrivers = "Nota: Intel PCH Chipset Init Kit (.bin OEM) escluso perche non installabile da Windows."
-$FooterApps    = "I programmi si installano con winget; la grafica aggiornata arriva da Intel Driver & Support Assistant."
+$FooterApps    = "Programmi con winget (Winhanced dal sito ufficiale); grafica aggiornata con Intel Driver & Support Assistant."
 $FooterScreen  = "Ogni modifica dello schermo chiede conferma entro 15 secondi, altrimenti torna allo stato precedente."
 
 function Set-PresetButtons {
@@ -1477,6 +1482,34 @@ function Update-InstallButton {
         3 { $Ctrl.BtnInstall.Content = "Applica Ottimizzazioni Selezionate"; $Ctrl.BtnInstall.IsEnabled = (-not $running); $Ctrl.TxtFooterInfo.Text = $FooterSystem }
         default { $Ctrl.BtnInstall.Content = "Installa"; $Ctrl.BtnInstall.IsEnabled = $false; $Ctrl.TxtFooterInfo.Text = $FooterScreen }
     }
+}
+
+# --- Programmi scaricati dal sito ufficiale (Source = 'web'), per esempio Winhanced ---
+# Logica pura: tra tutti gli indirizzi https che corrispondono al modello sceglie quello con la versione piu alta
+# (confronto come [version], non alfabetico). Il modello fissa anche l'host. Restituisce $null se non ce ne sono.
+# La definizione di questa funzione viene passata anche al runspace della coda programmi (una sola versione della logica).
+function Get-WebInstallerUrl {
+    param([string]$Html, [string]$Pattern)
+    $best = $null
+    $bestVer = $null
+    foreach ($m in [regex]::Matches([string]$Html, $Pattern)) {
+        $url = [string]$m.Value
+        if (-not $url.StartsWith('https://', [StringComparison]::OrdinalIgnoreCase)) { continue }
+        $ver = $null
+        if ($m.Groups.Count -gt 1) { try { $ver = [version]$m.Groups[1].Value } catch { $ver = $null } }
+        if ($null -eq $ver) { $ver = [version]'0.0' }
+        if ($null -eq $bestVer -or $ver -gt $bestVer) { $best = $url; $bestVer = $ver }
+    }
+    return $best
+}
+
+# Controllo della firma Authenticode di un file: restituisce stato, firmatario e se e valida. Non esegue nulla.
+function Test-InstallerSignature {
+    param([string]$Path)
+    $sig = Get-AuthenticodeSignature -LiteralPath $Path
+    $signer = $null
+    if ($sig.SignerCertificate) { $signer = [string]$sig.SignerCertificate.Subject }
+    return [PSCustomObject]@{ Status = [string]$sig.Status; Signer = $signer; IsValid = ([string]$sig.Status -eq 'Valid') }
 }
 
 # --- Rilevamento programmi (asincrono: winget export impiega circa 30 secondi) ---
@@ -1502,6 +1535,19 @@ function Start-AppDetection {
     $ps.Runspace = $rs
     [void]$ps.AddScript({
         function Log-Det([string]$Msg) { $Sync.LogQueue.Enqueue("[" + (Get-Date).ToString("HH:mm:ss") + "] " + $Msg) }
+        # Voci scaricate dal sito: si cercano tra le voci di disinstallazione (non dipende da winget).
+        function Test-UninstallMatch([string]$Rx) {
+            foreach ($rp in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                              'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                              'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
+                try {
+                    foreach ($e in @(Get-ItemProperty -Path $rp -ErrorAction SilentlyContinue)) {
+                        if ($e.DisplayName -and ([string]$e.DisplayName) -match $Rx) { return $true }
+                    }
+                } catch {}
+            }
+            return $false
+        }
         try {
             $installed = $null
             if ($WingetPath) {
@@ -1552,6 +1598,8 @@ function Start-AppDetection {
                     $found = $false
                     try { $found = [bool](Get-AppxPackage -Name $def.AppxName -ErrorAction SilentlyContinue) } catch {}
                     $item.SystemStatus = if ($found) { "Installato" } else { "Non installato" }
+                } elseif ($def.Source -eq 'web') {
+                    $item.SystemStatus = if (Test-UninstallMatch $def.UninstallMatch) { "Installato" } else { "Non installato" }
                 } elseif (-not $WingetPath) {
                     $item.SystemStatus = "winget assente"
                 } elseif ($null -eq $installed) {
@@ -3034,14 +3082,19 @@ function Start-AppInstall {
         return
     }
 
-    $wingetCmd = Get-Command winget.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-    if (-not $wingetCmd) {
-        $msg = 'winget non trovato su questo PC. Aggiorna "Programma di installazione app" dal Microsoft Store e riprova. Sulle edizioni LTSC winget non e incluso e va installato a parte.'
-        Write-UiLog $msg
-        [System.Windows.MessageBox]::Show($msg, "winget assente", "OK", "Warning") | Out-Null
-        return
+    # winget serve solo se tra le voci selezionate ce ne sono di winget o dello Store (le voci "web" non ne hanno bisogno).
+    $wingetPath = $null
+    $needWinget = (@($selected | Where-Object { $_.Def.Source -ne 'web' }).Count -gt 0)
+    if ($needWinget) {
+        $wingetCmd = Get-Command winget.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $wingetCmd) {
+            $msg = 'winget non trovato su questo PC. Aggiorna "Programma di installazione app" dal Microsoft Store e riprova. Sulle edizioni LTSC winget non e incluso e va installato a parte.'
+            Write-UiLog $msg
+            [System.Windows.MessageBox]::Show($msg, "winget assente", "OK", "Warning") | Out-Null
+            return
+        }
+        $wingetPath = [string]$wingetCmd.Source
     }
-    $wingetPath = [string]$wingetCmd.Source
 
     $Sync.Mode            = 'apps'
     $Sync.IsRunning       = $true
@@ -3067,6 +3120,8 @@ function Start-AppInstall {
     $rs.SessionStateProxy.SetVariable('Sync', $Sync)
     $rs.SessionStateProxy.SetVariable('SelectedItems', $selected)
     $rs.SessionStateProxy.SetVariable('WingetPath', $wingetPath)
+    $rs.SessionStateProxy.SetVariable('WebUrlFn', (Get-Command Get-WebInstallerUrl).ScriptBlock.ToString())
+    $rs.SessionStateProxy.SetVariable('WebSigFn', (Get-Command Test-InstallerSignature).ScriptBlock.ToString())
 
     $ps = [powershell]::Create()
     $ps.Runspace = $rs
@@ -3128,12 +3183,146 @@ function Start-AppInstall {
             return $lines
         }
 
+        # Funzioni pure condivise con la UI (una sola definizione, passata come testo).
+        Set-Item -Path 'function:Get-WebInstallerUrl' -Value ([scriptblock]::Create($WebUrlFn))
+        Set-Item -Path 'function:Test-InstallerSignature' -Value ([scriptblock]::Create($WebSigFn))
+        Add-Type -AssemblyName System.Net.Http
+
+        # Scarica un file a flusso (.part poi rinomina) con avanzamento reale; "Annulla" lo interrompe.
+        function Download-WebFile([string]$Url, [string]$DestPath, [string]$Label) {
+            $part = "$DestPath.part"
+            if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue }
+            $client = New-Object System.Net.Http.HttpClient
+            $client.Timeout = [TimeSpan]::FromMinutes(90)
+            try {
+                $resp = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+                if (-not $resp.IsSuccessStatusCode) { throw "HTTP $([int]$resp.StatusCode) ($($resp.ReasonPhrase)) su $Url" }
+                $totalBytes = $resp.Content.Headers.ContentLength
+                $inStream  = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+                $outStream = [System.IO.File]::Create($part)
+                try {
+                    $buffer = New-Object byte[] 65536
+                    $readTotal = [long]0
+                    $lastTick = [Environment]::TickCount
+                    while (($read = $inStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                        if ($Sync.CancelRequested) { throw "Annullato dall'utente durante il download." }
+                        $outStream.Write($buffer, 0, $read)
+                        $readTotal += $read
+                        if (([Environment]::TickCount - $lastTick) -ge 200) {
+                            $lastTick = [Environment]::TickCount
+                            $mbDone = [Math]::Round($readTotal / 1MB, 0)
+                            if ($totalBytes -and $totalBytes -gt 0) {
+                                $pct = [int][Math]::Min(100, ($readTotal * 100 / $totalBytes))
+                                $mbTot = [Math]::Round($totalBytes / 1MB, 0)
+                                $Sync.StepPct = $pct
+                                $Sync.ProgressTitle = "Download di $Label... $pct% ($mbDone / $mbTot MB)"
+                            } else {
+                                $Sync.ProgressTitle = "Download di $Label... $mbDone MB"
+                            }
+                        }
+                    }
+                    $Sync.StepPct = 100
+                } finally {
+                    $outStream.Dispose()
+                    $inStream.Dispose()
+                }
+            } catch {
+                if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue }
+                throw
+            } finally {
+                $client.Dispose()
+            }
+            if (Test-Path -LiteralPath $DestPath) { Remove-Item -LiteralPath $DestPath -Force }
+            Move-Item -LiteralPath $part -Destination $DestPath -Force
+        }
+
+        # Voce scaricata dal sito ufficiale: indirizzo letto dalla pagina, download, controllo firma, installer interattivo.
+        function Install-WebItem($Item, $Def) {
+            $appsDir = Join-Path $workRoot "apps"
+            New-Item -ItemType Directory -Path $appsDir -Force | Out-Null
+            Log-Step "--- [$idx/$total] $($Def.Name) (dal sito ufficiale) ---"
+
+            $url = $null
+            try {
+                $Sync.ProgressTitle = "Lettura della pagina ufficiale di $($Def.Name)..."
+                $page = Invoke-WebRequest -Uri $Def.PageUrl -UseBasicParsing -TimeoutSec 30
+                $url = Get-WebInstallerUrl -Html ([string]$page.Content) -Pattern $Def.UrlPattern
+            } catch {
+                Log-Step "Pagina ufficiale non raggiungibile ($($Def.PageUrl)): $($_.Exception.Message)"
+            }
+            if (-not $url) {
+                $Item.RunStatus = "Da installare a mano"
+                $Sync.ErrorCount++
+                try { Start-Process $Def.PageUrl } catch {}
+                Log-Step "Indirizzo dell'installer non trovato: ho aperto la pagina ufficiale ($($Def.PageUrl)) nel browser, scarica e installa $($Def.Name) a mano."
+                return
+            }
+            Log-Step "Indirizzo trovato: $url"
+
+            $fileName = [System.IO.Path]::GetFileName(([uri]$url).AbsolutePath)
+            $dest = Join-Path $appsDir $fileName
+            try {
+                $Item.RunStatus = "Download..."
+                $Sync.DirtyApps = $true
+                $Sync.StepPct = 0
+                Download-WebFile -Url $url -DestPath $dest -Label $Def.Name
+            } catch {
+                if ($Sync.CancelRequested) {
+                    $Item.RunStatus = "Annullato"
+                    Log-Step "Download annullato dall'utente."
+                } else {
+                    $Item.RunStatus = "Errore (download)"
+                    $Sync.ErrorCount++
+                    Log-Step "Download non riuscito: $($_.Exception.Message)"
+                }
+                return
+            }
+
+            try {
+                $sig = Test-InstallerSignature -Path $dest
+                if (-not $sig.IsValid) {
+                    Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+                    $Item.RunStatus = "Errore (firma)"
+                    $Sync.ErrorCount++
+                    Log-Step "Firma NON valida: stato $($sig.Status), firmatario [$($sig.Signer)]. Installer cancellato e non eseguito."
+                    return
+                }
+                Log-Step "Firma valida. Firmatario: $($sig.Signer)"
+
+                $Item.RunStatus = "Installazione..."
+                $Sync.DirtyApps = $true
+                $Sync.StepPct = 100
+                $Sync.ProgressTitle = "Completa l'installazione di $($Def.Name) nella finestra aperta..."
+                Log-Step "Avvio l'installer in modo interattivo (procedura guidata): $dest"
+                $proc = Start-Process -FilePath $dest -PassThru
+                $null = $proc.Handle
+                while (-not $proc.WaitForExit(500)) { }
+                $code = [int]$proc.ExitCode
+                Log-Step "ExitCode installer ($($Def.Id)): $code"
+                if ($code -eq 0) {
+                    $Item.RunStatus = "Completato"
+                    $Sync.SuccessCount++
+                } else {
+                    $Item.RunStatus = "Errore ($code)"
+                    $Sync.ErrorCount++
+                }
+            } catch {
+                $Item.RunStatus = "Errore"
+                $Sync.ErrorCount++
+                Log-Step "ECCEZIONE su $($Def.Name): $($_.Exception.Message)"
+            } finally {
+                if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue }
+            }
+        }
+
         $okCodes = @(0, -1978335189, -1978335135)
         $total = $SelectedItems.Count
         $idx = 0
 
         try {
-            Log-Step "=== Avvio installazione programmi ($total) con winget: $WingetPath ==="
+            $wgTxt = "nessuna voce winget"
+            if ($WingetPath) { $wgTxt = "winget: $WingetPath" }
+            Log-Step "=== Avvio installazione programmi ($total), $wgTxt ==="
 
             foreach ($item in $SelectedItems) {
                 if ($Sync.CancelRequested) {
@@ -3149,6 +3338,9 @@ function Start-AppInstall {
                 $item.RunStatus = "Installazione..."
                 $Sync.DirtyApps = $true
 
+                if ($def.Source -eq 'web') {
+                    Install-WebItem -Item $item -Def $def
+                } else {
                 $wargs = "install --id `"$($def.Id)`" --exact --source $($def.Source) --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
                 Log-Step "--- [$idx/$total] $($def.Name) ---"
                 Log-Step "winget $wargs"
@@ -3172,7 +3364,7 @@ function Start-AppInstall {
                     $Sync.ErrorCount++
                     Log-Step "ECCEZIONE su $($def.Name): $($_.Exception.Message)"
                 }
-
+                }
                 $Sync.StepPct = 100
                 $Sync.DirtyApps = $true
                 $Sync.TotalPct = [int](($idx * 100) / $total)
