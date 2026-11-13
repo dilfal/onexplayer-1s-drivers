@@ -1,10 +1,11 @@
 <#
 .SYNOPSIS
-    OneXPlayer 1S Driver Utility (Windows 11 Pro) - GUI stile Chris Titus WinUtil.
+    OneXPlayer 1S Utility (Windows 11) - GUI stile Chris Titus WinUtil.
 .DESCRIPTION
-    Scarica (da GitHub Releases o da cartella locale), estrae e installa in sequenza
-    silenziosa tutti i driver del OneXPlayer 1S con barra di avanzamento, rilevamento
-    automatico dello stato sul sistema, Punto di Ripristino e riavvio unico finale.
+    Tre schede: Driver (scarica da GitHub Releases o da cartella locale, estrae e installa
+    in sequenza silenziosa i driver del OneXPlayer 1S, con rilevamento dello stato, Punto di
+    Ripristino e riavvio unico finale), Gioco (installa con winget i programmi per giocare)
+    e Schermo (rotazione, blocco rotazione automatica e risoluzione).
 .EXAMPLE
     irm 070293.xyz/oxp-win | iex
     irm https://raw.githubusercontent.com/dilfal/onexplayer-1s-drivers/main/oxp1s.ps1 | iex
@@ -68,8 +69,147 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 }
 
+# Classe per orientamento e risoluzione dello schermo (user32.dll). C# 5: compatibile con Windows PowerShell 5.1.
+if (-not ('OxpDisplay' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+
+public static class OxpDisplay
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion;
+        public short dmDriverVersion;
+        public short dmSize;
+        public short dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX;
+        public int dmPositionY;
+        public int dmDisplayOrientation;
+        public int dmDisplayFixedOutput;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel;
+        public int dmPelsWidth;
+        public int dmPelsHeight;
+        public int dmDisplayFlags;
+        public int dmDisplayFrequency;
+        public int dmICMMethod;
+        public int dmICMIntent;
+        public int dmMediaType;
+        public int dmDitherType;
+        public int dmReserved1;
+        public int dmReserved2;
+        public int dmPanningWidth;
+        public int dmPanningHeight;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int ChangeDisplaySettingsEx(string lpszDeviceName, ref DEVMODE lpDevMode, IntPtr hwnd, int dwFlags, IntPtr lParam);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "MessageBoxTimeoutW")]
+    private static extern int MessageBoxTimeout(IntPtr hWnd, string text, string caption, uint type, ushort languageId, int milliseconds);
+
+    private const int ENUM_CURRENT_SETTINGS = -1;
+    private const int CDS_UPDATEREGISTRY = 1;
+    private const int CDS_TEST = 2;
+    private const int DM_DISPLAYORIENTATION = 0x80;
+    private const int DM_PELSWIDTH = 0x80000;
+    private const int DM_PELSHEIGHT = 0x100000;
+    private const int DM_DISPLAYFREQUENCY = 0x400000;
+
+    private static DEVMODE NewDevMode()
+    {
+        DEVMODE dm = new DEVMODE();
+        dm.dmDeviceName = new string(' ', 0);
+        dm.dmFormName = new string(' ', 0);
+        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+        return dm;
+    }
+
+    public static int StructSize()
+    {
+        return Marshal.SizeOf(typeof(DEVMODE));
+    }
+
+    // Restituisce { larghezza, altezza, orientamento (0-3), frequenza } oppure null.
+    public static int[] Current()
+    {
+        DEVMODE dm = NewDevMode();
+        if (!EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref dm)) { return null; }
+        return new int[] { dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayOrientation, dm.dmDisplayFrequency };
+    }
+
+    // Modalita distinte nell'orientamento corrente: { larghezza, altezza, frequenza massima }.
+    public static List<int[]> Modes()
+    {
+        List<int[]> result = new List<int[]>();
+        Dictionary<long, int[]> seen = new Dictionary<long, int[]>();
+        int i = 0;
+        while (true)
+        {
+            DEVMODE dm = NewDevMode();
+            if (!EnumDisplaySettings(null, i, ref dm)) { break; }
+            i++;
+            long key = ((long)dm.dmPelsWidth << 32) | (long)(uint)dm.dmPelsHeight;
+            int[] entry;
+            if (seen.TryGetValue(key, out entry))
+            {
+                if (dm.dmDisplayFrequency > entry[2]) { entry[2] = dm.dmDisplayFrequency; }
+            }
+            else
+            {
+                entry = new int[] { dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency };
+                seen[key] = entry;
+                result.Add(entry);
+            }
+        }
+        return result;
+    }
+
+    // Parte dalle impostazioni correnti. Restituisce 0 se riuscito (DISP_CHANGE_SUCCESSFUL).
+    public static int Apply(int width, int height, int orientation, int frequency, bool testOnly)
+    {
+        DEVMODE dm = NewDevMode();
+        if (!EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref dm)) { return -99; }
+        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+        dm.dmDisplayOrientation = orientation;
+        dm.dmPelsWidth = width;
+        dm.dmPelsHeight = height;
+        dm.dmFields = DM_DISPLAYORIENTATION | DM_PELSWIDTH | DM_PELSHEIGHT;
+        if (frequency > 0)
+        {
+            dm.dmDisplayFrequency = frequency;
+            dm.dmFields = dm.dmFields | DM_DISPLAYFREQUENCY;
+        }
+        int flags = testOnly ? CDS_TEST : CDS_UPDATEREGISTRY;
+        return ChangeDisplaySettingsEx(null, ref dm, IntPtr.Zero, flags, IntPtr.Zero);
+    }
+
+    // MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST. 6 = Si, 7 = No, 32000 = tempo scaduto.
+    public static int AskKeep(string text, string caption, int seconds)
+    {
+        uint type = 0x4 | 0x20 | 0x100 | 0x10000 | 0x40000;
+        return MessageBoxTimeout(IntPtr.Zero, text, caption, type, 0, seconds * 1000);
+    }
+}
+'@
+}
+
 # ---------------------------------------------------------------------------
-# 3. Manifest dei 12 driver OneXPlayer 1S (ordine sequenziale ottimale)
+# 3. Manifest dei 13 driver OneXPlayer 1S (ordine sequenziale ottimale)
 # ---------------------------------------------------------------------------
 $DriverDefinitions = @(
     [ordered]@{
@@ -116,19 +256,18 @@ $DriverDefinitions = @(
     [ordered]@{
         Order          = 3
         Id             = 'csme'
-        Name           = 'Intel CSME / MEI-Only Driver'
+        Name           = 'Intel Management Engine (MEI + DAL + iCLS)'
         Category       = 'Sistema'
-        PackageVersion = '15.0.1.1345'
-        DetectVersion  = '2031.15.0.1743'   # DriverVer di heci.inf: il kit ha un numero diverso dal driver
-        ZipName        = 'intel_(r)_csme_15.0.1.1345v4.2_b0_consumer.zip'
-        AssetName      = 'intel_.r._csme_15.0.1.1345v4.2_b0_consumer.zip'
-        SizeMB         = 307.7
-        Method         = 'EXE'
-        MethodLabel    = 'EXE Silenzioso (MEI-Only)'
-        ExePath        = 'Intel_(R)_CSME_15.0.1.1345v4.2_B0_Consumer\Installers\MEI-Only Installer MSI\MEISetup.exe'
-        ExeArgs        = '/s /drvonly /report "{LOG}"'
-        OkCodes        = @(0)
-        RebootCodes    = @(3010, 1641)
+        PackageVersion = '2108.100.0.1053'
+        ZipName        = 'me_2108.100.0.1053_tgl.zip'
+        SizeMB         = 17.9
+        Method         = 'INF'
+        MethodLabel    = 'INF (pnputil)'
+        InfTargets     = @(
+            @{ Path = 'MEI\win10\heci.inf'; Subdirs = $false },
+            @{ Path = 'JHI\win10\DAL.inf'; Subdirs = $false },
+            @{ Path = 'ICLS\iclsClient.inf'; Subdirs = $false }
+        )
         Essential      = $true
         MatchNames     = @('Intel\(R\) Management Engine Interface')
         MatchInfs      = @('heci\.inf')
@@ -259,15 +398,15 @@ $DriverDefinitions = @(
         Id             = 'tbt'
         Name           = 'Intel Thunderbolt DCH'
         Category       = 'Porte & Sensori'
-        PackageVersion = '1.41.987.0'
-        ZipName        = 'tbt_dch_sw_rev75.zip'
-        SizeMB         = 181.2
+        PackageVersion = '1.41.1054.0'
+        ZipName        = 'tbt_dch_1.41.1054.0.zip'
+        SizeMB         = 1.4
         Method         = 'INF'
         MethodLabel    = 'INF (pnputil)'
         InfTargets     = @(
-            @{ Path = 'TBT_DCH_SW_Rev75\Drivers\ThunderboltWindowsDchSetup\TbtHostController.inf'; Subdirs = $false },
-            @{ Path = 'TBT_DCH_SW_Rev75\Drivers\ThunderboltWindowsDchSetup\TbtP2pNdisDrv.inf'; Subdirs = $false },
-            @{ Path = 'TBT_DCH_SW_Rev75\Drivers\ThunderboltApplicationLauncherSetup\TbtHostControllerExtension.inf'; Subdirs = $false }
+            @{ Path = 'ThunderboltWindowsDchSetup\TbtHostController.inf'; Subdirs = $false },
+            @{ Path = 'ThunderboltWindowsDchSetup\TbtP2pNdisDrv.inf'; Subdirs = $false },
+            @{ Path = 'ThunderboltApplicationLauncherSetup\TbtHostControllerExtension.inf'; Subdirs = $false }
         )
         Essential      = $false
         MatchNames     = @('Thunderbolt\(TM\) Controller')
@@ -310,7 +449,78 @@ $DriverDefinitions = @(
         MatchNames     = @('Bosch.*Accelerometer', 'BMA2x2')
         MatchInfs      = @('boschaccelerometer\.inf')
         UninstallMatch = ''
+    },
+    [ordered]@{
+        Order          = 13
+        Id             = 'fingerprint'
+        Name           = 'FocalTech Fingerprint Reader'
+        Category       = 'Porte & Sensori'
+        PackageVersion = '2.0.3.71'
+        ZipName        = 'fingerprint_focaltech_2.0.3.71.zip'
+        SizeMB         = 0.5
+        Method         = 'INF'
+        MethodLabel    = 'INF (pnputil)'
+        InfTargets     = @(
+            @{ Path = 'ftWbioUmdfDriverV2.inf'; Subdirs = $false }
+        )
+        Essential      = $false
+        MatchNames     = @('FocalTech.*Fingerprint')
+        MatchInfs      = @('ftwbioumdfdriverv2\.inf')
+        UninstallMatch = ''
     }
+)
+
+# ---------------------------------------------------------------------------
+# 3b. Manifest dei programmi per giocare (installati con winget)
+# ---------------------------------------------------------------------------
+$AppDefinitions = @(
+    [ordered]@{ Order = 1;  Id = 'Microsoft.VCRedist.2015+.x64'; Source = 'winget'; Name = 'Visual C++ 2015-2022 (x64)'; Category = 'Librerie'
+        Purpose = 'Libreria richiesta da moltissimi giochi e programmi'; Recommended = $true },
+    [ordered]@{ Order = 2;  Id = 'Microsoft.VCRedist.2015+.x86'; Source = 'winget'; Name = 'Visual C++ 2015-2022 (x86)'; Category = 'Librerie'
+        Purpose = 'Come sopra, per i programmi a 32 bit'; Recommended = $true },
+    [ordered]@{ Order = 3;  Id = 'Microsoft.DirectX'; Source = 'winget'; Name = 'DirectX End-User Runtime'; Category = 'Librerie'
+        Purpose = 'Componenti DirectX storici che servono a molti giochi'; Recommended = $true },
+    [ordered]@{ Order = 4;  Id = 'Microsoft.DotNet.DesktopRuntime.8'; Source = 'winget'; Name = '.NET Desktop Runtime 8'; Category = 'Librerie'
+        Purpose = 'Serve a Playnite, Handheld Companion e altri programmi'; Recommended = $true },
+    [ordered]@{ Order = 5;  Id = 'Intel.IntelDriverAndSupportAssistant'; Source = 'winget'; Name = 'Intel Driver & Support Assistant'; Category = 'Grafica'
+        Purpose = 'Aggiorna grafica Iris Xe, Wi-Fi e Bluetooth alle versioni Intel correnti'; Recommended = $true },
+    [ordered]@{ Order = 6;  Id = '9PLFNLNT3G5G'; Source = 'msstore'; Name = 'Intel Graphics Command Center'; Category = 'Grafica'
+        Purpose = 'Scalatura a numeri interi per giocare a 1280x800 senza sfocature'; Recommended = $true
+        AppxName = 'AppUp.IntelGraphicsExperience' },
+    [ordered]@{ Order = 7;  Id = 'Valve.Steam'; Source = 'winget'; Name = 'Steam'; Category = 'Negozi'
+        Purpose = 'Negozio e libreria di giochi Valve, con modalita Big Picture'; Recommended = $true },
+    [ordered]@{ Order = 8;  Id = 'Playnite.Playnite'; Source = 'winget'; Name = 'Playnite'; Category = 'Negozi'
+        Purpose = 'Libreria unica a schermo intero per tutti i negozi e gli emulatori'; Recommended = $true },
+    [ordered]@{ Order = 9;  Id = 'HeroicGamesLauncher.HeroicGamesLauncher'; Source = 'winget'; Name = 'Heroic Games Launcher'; Category = 'Negozi'
+        Purpose = 'Epic, GOG e Amazon Games in un solo programma leggero'; Recommended = $false },
+    [ordered]@{ Order = 10; Id = 'GOG.Galaxy'; Source = 'winget'; Name = 'GOG Galaxy'; Category = 'Negozi'
+        Purpose = 'Negozio e libreria dei giochi GOG'; Recommended = $false },
+    [ordered]@{ Order = 11; Id = 'EpicGames.EpicGamesLauncher'; Source = 'winget'; Name = 'Epic Games Launcher'; Category = 'Negozi'
+        Purpose = 'Negozio Epic, con i giochi gratuiti della settimana'; Recommended = $false },
+    [ordered]@{ Order = 12; Id = 'ElectronicArts.EADesktop'; Source = 'winget'; Name = 'EA app'; Category = 'Negozi'
+        Purpose = 'Negozio e libreria dei giochi Electronic Arts'; Recommended = $false },
+    [ordered]@{ Order = 13; Id = 'Ubisoft.Connect'; Source = 'winget'; Name = 'Ubisoft Connect'; Category = 'Negozi'
+        Purpose = 'Negozio e libreria dei giochi Ubisoft'; Recommended = $false },
+    [ordered]@{ Order = 14; Id = 'Guru3D.RTSS'; Source = 'winget'; Name = 'RivaTuner Statistics Server'; Category = 'Prestazioni'
+        Purpose = 'Limite di FPS per allungare la batteria e contatore a schermo'; Recommended = $true },
+    [ordered]@{ Order = 15; Id = 'Guru3D.Afterburner'; Source = 'winget'; Name = 'MSI Afterburner'; Category = 'Prestazioni'
+        Purpose = 'Monitoraggio a schermo di temperature, FPS e carico'; Recommended = $false },
+    [ordered]@{ Order = 16; Id = 'REALiX.HWiNFO'; Source = 'winget'; Name = 'HWiNFO'; Category = 'Prestazioni'
+        Purpose = 'Sensori dettagliati: temperature, consumi e frequenze'; Recommended = $false },
+    [ordered]@{ Order = 17; Id = 'BenjaminLSR.HandheldCompanion'; Source = 'winget'; Name = 'Handheld Companion'; Category = 'Prestazioni'
+        Purpose = 'Controllo TDP e giroscopio. Il 1S non e tra i dispositivi elencati: da provare'; Recommended = $false },
+    [ordered]@{ Order = 18; Id = 'TechPowerUp.ThrottleStop'; Source = 'winget'; Name = 'ThrottleStop'; Category = 'Prestazioni'
+        Purpose = 'Limiti di potenza della CPU, da regolare a mano con cautela'; Recommended = $false },
+    [ordered]@{ Order = 19; Id = 'Nvidia.GeForceNow'; Source = 'winget'; Name = 'GeForce NOW'; Category = 'Streaming'
+        Purpose = 'Giochi in streaming dal cloud NVIDIA'; Recommended = $false },
+    [ordered]@{ Order = 20; Id = 'MoonlightGameStreamingProject.Moonlight'; Source = 'winget'; Name = 'Moonlight'; Category = 'Streaming'
+        Purpose = 'Giochi in streaming da un PC di casa (Sunshine o NVIDIA)'; Recommended = $false },
+    [ordered]@{ Order = 21; Id = 'Libretro.RetroArch'; Source = 'winget'; Name = 'RetroArch'; Category = 'Emulazione'
+        Purpose = 'Emulatore multi-sistema per i giochi retro'; Recommended = $false },
+    [ordered]@{ Order = 22; Id = 'PCSX2Team.PCSX2'; Source = 'winget'; Name = 'PCSX2'; Category = 'Emulazione'
+        Purpose = 'Emulatore di PlayStation 2'; Recommended = $false },
+    [ordered]@{ Order = 23; Id = '7zip.7zip'; Source = 'winget'; Name = '7-Zip'; Category = 'Utilita'
+        Purpose = 'Apre e crea archivi ZIP, 7z, RAR e altri'; Recommended = $true }
 )
 
 # ---------------------------------------------------------------------------
@@ -475,6 +685,21 @@ foreach ($d in $DriverDefinitions) {
 
 $pnpErrCount = Update-DriverDetection -Items $DriverItems
 
+$AppItems = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
+foreach ($a in $AppDefinitions) {
+    $AppItems.Add([PSCustomObject]@{
+        IsSelected   = [bool]$a.Recommended
+        Order        = $a.Order
+        Id           = $a.Id
+        Name         = $a.Name
+        Category     = $a.Category
+        Purpose      = $a.Purpose
+        SystemStatus = "Analisi..."
+        RunStatus    = "In attesa"
+        Def          = $a
+    })
+}
+
 # Pre-seleziona di default quelli mancanti/aggiornabili se almeno uno manca, altrimenti tutti deselezionati?
 # L'utente ha chiesto la possibilita di installarli tutti uno dopo l'altro: lasciamo selezionati i mancanti o tutti.
 # Se tutti risultano mancanti (fresh install) sono gia tutti selezionati.
@@ -485,9 +710,9 @@ $pnpErrCount = Update-DriverDetection -Items $DriverItems
 [xml]$Xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="OneXPlayer 1S - Driver Utility (Windows 11 Pro)"
-        Width="1040" Height="740"
-        MinWidth="880" MinHeight="600"
+        Title="OneXPlayer 1S - Utility (Windows 11)"
+        Width="1080" Height="780"
+        MinWidth="900" MinHeight="620"
         WindowStartupLocation="CenterScreen"
         Background="#0F172A" Foreground="#F8FAFC"
         FontFamily="Segoe UI"
@@ -558,6 +783,197 @@ $pnpErrCount = Update-DriverDetection -Items $DriverItems
             <Setter Property="VerticalContentAlignment" Value="Center"/>
             <Setter Property="Margin" Value="0,0,16,0"/>
         </Style>
+
+        <!-- Schede (TabControl) a tema scuro -->
+        <Style TargetType="TabControl">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <Grid KeyboardNavigation.TabNavigation="Local">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <TabPanel Grid.Row="0" IsItemsHost="True" Margin="0,0,0,8" Background="Transparent"/>
+                            <ContentPresenter Grid.Row="1" ContentSource="SelectedContent"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="TabItem">
+            <Setter Property="Foreground" Value="#94A3B8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="TabBd" Background="#1E293B" BorderBrush="#334155" BorderThickness="1"
+                                CornerRadius="6" Padding="24,8" Margin="0,0,6,0">
+                            <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="TabBd" Property="Background" Value="#334155"/>
+                                <Setter Property="Foreground" Value="#F8FAFC"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="TabBd" Property="Background" Value="#0C4A6E"/>
+                                <Setter TargetName="TabBd" Property="BorderBrush" Value="#38BDF8"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Stili condivisi dalle due griglie (Driver e Gioco) -->
+        <Style x:Key="GridHeaderStyle" TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#0F172A"/>
+            <Setter Property="Foreground" Value="#94A3B8"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="8,7"/>
+            <Setter Property="BorderBrush" Value="#334155"/>
+            <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        </Style>
+
+        <Style x:Key="GridCellStyle" TargetType="DataGridCell">
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="6,2"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#25344D"/>
+                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="CellText" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="2,0"/>
+        </Style>
+
+        <Style x:Key="CellTextWrap" TargetType="TextBlock" BasedOn="{StaticResource CellText}">
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="2,4"/>
+        </Style>
+
+        <Style x:Key="CellCheck" TargetType="CheckBox">
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0"/>
+        </Style>
+
+        <Style x:Key="DarkGrid" TargetType="DataGrid">
+            <Setter Property="AutoGenerateColumns" Value="False"/>
+            <Setter Property="CanUserAddRows" Value="False"/>
+            <Setter Property="CanUserDeleteRows" Value="False"/>
+            <Setter Property="CanUserReorderColumns" Value="False"/>
+            <Setter Property="HeadersVisibility" Value="Column"/>
+            <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="#334155"/>
+            <Setter Property="Background" Value="#1E293B"/>
+            <Setter Property="RowBackground" Value="#1E293B"/>
+            <Setter Property="AlternatingRowBackground" Value="#162032"/>
+            <Setter Property="Foreground" Value="#F8FAFC"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="SelectionMode" Value="Single"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="MinRowHeight" Value="30"/>
+            <Setter Property="ColumnHeaderStyle" Value="{StaticResource GridHeaderStyle}"/>
+            <Setter Property="CellStyle" Value="{StaticResource GridCellStyle}"/>
+        </Style>
+
+        <Style x:Key="CardTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Foreground" Value="#38BDF8"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+
+        <Style x:Key="CardHint" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Foreground" Value="#94A3B8"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+
+        <!-- Barre di scorrimento scure -->
+        <SolidColorBrush x:Key="{x:Static SystemColors.ControlBrushKey}" Color="#0F172A"/>
+        <Style x:Key="ScrollThumbStyle" TargetType="Thumb">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border Background="#475569" CornerRadius="4" Margin="2"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ScrollPageStyle" TargetType="RepeatButton">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="#0F172A"/>
+            <Setter Property="Width" Value="12"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Border Background="#0F172A">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollPageStyle}"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ScrollThumbStyle}"/>
+                                </Track.Thumb>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollPageStyle}"/>
+                                </Track.IncreaseRepeatButton>
+                            </Track>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Width" Value="Auto"/>
+                    <Setter Property="Height" Value="12"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ScrollBar">
+                                <Border Background="#0F172A">
+                                    <Track x:Name="PART_Track" IsDirectionReversed="False">
+                                        <Track.DecreaseRepeatButton>
+                                            <RepeatButton Command="ScrollBar.PageLeftCommand" Style="{StaticResource ScrollPageStyle}"/>
+                                        </Track.DecreaseRepeatButton>
+                                        <Track.Thumb>
+                                            <Thumb Style="{StaticResource ScrollThumbStyle}"/>
+                                        </Track.Thumb>
+                                        <Track.IncreaseRepeatButton>
+                                            <RepeatButton Command="ScrollBar.PageRightCommand" Style="{StaticResource ScrollPageStyle}"/>
+                                        </Track.IncreaseRepeatButton>
+                                    </Track>
+                                </Border>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Grid Margin="16">
@@ -566,7 +982,7 @@ $pnpErrCount = Update-DriverDetection -Items $DriverItems
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="175"/>
+            <RowDefinition Height="140"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
@@ -578,8 +994,8 @@ $pnpErrCount = Update-DriverDetection -Items $DriverItems
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
-                    <TextBlock Text="OneXPlayer 1S - Driver Installer Utility" FontSize="20" FontWeight="Bold" Foreground="#38BDF8"/>
-                    <TextBlock x:Name="TxtSubtitle" Text="Installazione sequenziale silenziosa per Windows 11 Pro (12 pacchetti ufficiali)"
+                    <TextBlock Text="OneXPlayer 1S - Utility" FontSize="20" FontWeight="Bold" Foreground="#38BDF8"/>
+                    <TextBlock x:Name="TxtSubtitle" Text="Driver, programmi per giocare e impostazioni dello schermo per Windows 11"
                                FontSize="12" Foreground="#94A3B8" Margin="0,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
@@ -589,82 +1005,171 @@ $pnpErrCount = Update-DriverDetection -Items $DriverItems
             </Grid>
         </Border>
 
-        <!-- TOOLBAR PRESET E OPZIONI -->
-        <Border Grid.Row="1" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,10">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-                <WrapPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-                    <Button x:Name="BtnSelectAll" Content="Seleziona Tutti (12)" Style="{StaticResource ToolbarBtn}"/>
-                    <Button x:Name="BtnSelectMissing" Content="Solo Mancanti / Aggiornabili" Style="{StaticResource ToolbarBtn}"/>
-                    <Button x:Name="BtnSelectEssential" Content="Solo Essenziali (Core + Rete + GPU)" Style="{StaticResource ToolbarBtn}"/>
-                    <Button x:Name="BtnSelectNone" Content="Deseleziona Tutto" Style="{StaticResource ToolbarBtn}"/>
-                    <Button x:Name="BtnRefresh" Content="Aggiorna Rilevamento" Style="{StaticResource ToolbarBtn}"/>
-                    <Button x:Name="BtnDevMgmt" Content="Gestione Dispositivi" Style="{StaticResource ToolbarBtn}"/>
-                </WrapPanel>
-                <WrapPanel Grid.Row="1" Orientation="Horizontal">
-                    <CheckBox x:Name="ChkRestorePoint" Content="Crea Punto di Ripristino prima di iniziare" IsChecked="True"/>
-                    <CheckBox x:Name="ChkUseLocal" Content="Usa .zip locali se presenti (cartella 'drivers' o corrente)" IsChecked="True"/>
-                    <CheckBox x:Name="ChkCleanup" Content="Elimina file temporanei al termine" IsChecked="True"/>
-                </WrapPanel>
-            </Grid>
-        </Border>
+        <!-- SCHEDE: DRIVER / GIOCO / SCHERMO -->
+        <TabControl x:Name="MainTabs" Grid.Row="1" Grid.RowSpan="2" Margin="0,0,0,10">
 
-        <!-- LISTA DRIVER -->
-        <Border Grid.Row="2" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="4" Margin="0,0,0,10">
-            <DataGrid x:Name="GridDrivers"
-                      AutoGenerateColumns="False"
-                      CanUserAddRows="False"
-                      CanUserDeleteRows="False"
-                      CanUserReorderColumns="False"
-                      HeadersVisibility="Column"
-                      GridLinesVisibility="Horizontal"
-                      HorizontalGridLinesBrush="#334155"
-                      Background="#1E293B"
-                      RowBackground="#1E293B"
-                      AlternatingRowBackground="#162032"
-                      Foreground="#F8FAFC"
-                      BorderThickness="0"
-                      SelectionMode="Single"
-                      FontSize="12.5"
-                      RowHeight="30">
-                <DataGrid.ColumnHeaderStyle>
-                    <Style TargetType="DataGridColumnHeader">
-                        <Setter Property="Background" Value="#0F172A"/>
-                        <Setter Property="Foreground" Value="#94A3B8"/>
-                        <Setter Property="FontWeight" Value="SemiBold"/>
-                        <Setter Property="Padding" Value="8,7"/>
-                        <Setter Property="BorderBrush" Value="#334155"/>
-                        <Setter Property="BorderThickness" Value="0,0,0,1"/>
-                    </Style>
-                </DataGrid.ColumnHeaderStyle>
-                <DataGrid.CellStyle>
-                    <Style TargetType="DataGridCell">
-                        <Setter Property="BorderThickness" Value="0"/>
-                        <Setter Property="Padding" Value="6,2"/>
-                        <Setter Property="VerticalAlignment" Value="Center"/>
-                        <Style.Triggers>
-                            <Trigger Property="IsSelected" Value="True">
-                                <Setter Property="Background" Value="#25344D"/>
-                                <Setter Property="Foreground" Value="#FFFFFF"/>
-                            </Trigger>
-                        </Style.Triggers>
-                    </Style>
-                </DataGrid.CellStyle>
-                <DataGrid.Columns>
-                    <DataGridCheckBoxColumn Header="Sel." Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="46"/>
-                    <DataGridTextColumn Header="#" Binding="{Binding Order}" IsReadOnly="True" Width="36"/>
-                    <DataGridTextColumn Header="Driver" Binding="{Binding Name}" IsReadOnly="True" Width="260"/>
-                    <DataGridTextColumn Header="Categoria" Binding="{Binding Category}" IsReadOnly="True" Width="115"/>
-                    <DataGridTextColumn Header="Versione" Binding="{Binding PackageVersion}" IsReadOnly="True" Width="115"/>
-                    <DataGridTextColumn Header="Metodo" Binding="{Binding MethodLabel}" IsReadOnly="True" Width="145"/>
-                    <DataGridTextColumn Header="Stato sul PC" Binding="{Binding SystemStatus}" IsReadOnly="True" Width="155"/>
-                    <DataGridTextColumn Header="Avanzamento" Binding="{Binding RunStatus}" IsReadOnly="True" Width="*"/>
-                </DataGrid.Columns>
-            </DataGrid>
-        </Border>
+            <!-- ===================== SCHEDA DRIVER ===================== -->
+            <TabItem Header="Driver">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- TOOLBAR PRESET E OPZIONI -->
+                    <Border Grid.Row="0" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,10">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <WrapPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button x:Name="BtnSelectAll" Content="Seleziona Tutti (13)" Style="{StaticResource ToolbarBtn}"/>
+                                <Button x:Name="BtnSelectMissing" Content="Solo Mancanti / Aggiornabili" Style="{StaticResource ToolbarBtn}"/>
+                                <Button x:Name="BtnSelectEssential" Content="Solo Essenziali (Core + Rete + GPU)" Style="{StaticResource ToolbarBtn}"/>
+                                <Button x:Name="BtnSelectNone" Content="Deseleziona Tutto" Style="{StaticResource ToolbarBtn}"/>
+                                <Button x:Name="BtnRefresh" Content="Aggiorna Rilevamento" Style="{StaticResource ToolbarBtn}"/>
+                                <Button x:Name="BtnDevMgmt" Content="Gestione Dispositivi" Style="{StaticResource ToolbarBtn}"/>
+                            </WrapPanel>
+                            <WrapPanel Grid.Row="1" Orientation="Horizontal">
+                                <CheckBox x:Name="ChkRestorePoint" Content="Crea Punto di Ripristino prima di iniziare" IsChecked="True"/>
+                                <CheckBox x:Name="ChkUseLocal" Content="Usa .zip locali se presenti (cartella 'drivers' o corrente)" IsChecked="True"/>
+                                <CheckBox x:Name="ChkCleanup" Content="Elimina file temporanei al termine" IsChecked="True"/>
+                            </WrapPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- LISTA DRIVER -->
+                    <Border Grid.Row="1" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="4">
+                        <DataGrid x:Name="GridDrivers" Style="{StaticResource DarkGrid}" RowHeight="30">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header="Sel." Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="46"
+                                                        ElementStyle="{StaticResource CellCheck}" EditingElementStyle="{StaticResource CellCheck}"/>
+                                <DataGridTextColumn Header="#" Binding="{Binding Order}" IsReadOnly="True" Width="32" ElementStyle="{StaticResource CellText}"/>
+                                <DataGridTextColumn Header="Driver" Binding="{Binding Name}" IsReadOnly="True" Width="290" ElementStyle="{StaticResource CellText}"/>
+                                <DataGridTextColumn Header="Categoria" Binding="{Binding Category}" IsReadOnly="True" Width="105" ElementStyle="{StaticResource CellText}"/>
+                                <DataGridTextColumn Header="Versione" Binding="{Binding PackageVersion}" IsReadOnly="True" Width="110" ElementStyle="{StaticResource CellText}"/>
+                                <DataGridTextColumn Header="Metodo" Binding="{Binding MethodLabel}" IsReadOnly="True" Width="130" ElementStyle="{StaticResource CellText}"/>
+                                <DataGridTextColumn Header="Stato sul PC" Binding="{Binding SystemStatus}" IsReadOnly="True" Width="170" ElementStyle="{StaticResource CellText}"/>
+                                <DataGridTextColumn Header="Avanzamento" Binding="{Binding RunStatus}" IsReadOnly="True" Width="*" ElementStyle="{StaticResource CellText}"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <!-- ===================== SCHEDA GIOCO ===================== -->
+            <TabItem Header="Gioco">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Border Grid.Row="0" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,10">
+                        <WrapPanel Orientation="Horizontal">
+                            <Button x:Name="BtnAppRecommended" Content="Consigliati" Style="{StaticResource ToolbarBtn}"/>
+                            <Button x:Name="BtnAppAll" Content="Tutti" Style="{StaticResource ToolbarBtn}"/>
+                            <Button x:Name="BtnAppNone" Content="Nessuno" Style="{StaticResource ToolbarBtn}"/>
+                            <Button x:Name="BtnAppRefresh" Content="Aggiorna stato" Style="{StaticResource ToolbarBtn}"/>
+                            <TextBlock Text="Installazione con winget (serve la connessione a Internet)." VerticalAlignment="Center"
+                                       FontSize="11.5" Foreground="#94A3B8" Margin="4,0,0,0"/>
+                        </WrapPanel>
+                    </Border>
+
+                    <Border Grid.Row="1" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="4">
+                        <DataGrid x:Name="GridApps" Style="{StaticResource DarkGrid}">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header="Sel." Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="46"
+                                                        ElementStyle="{StaticResource CellCheck}" EditingElementStyle="{StaticResource CellCheck}"/>
+                                <DataGridTextColumn Header="Programma" Binding="{Binding Name}" IsReadOnly="True" Width="215" ElementStyle="{StaticResource CellTextWrap}"/>
+                                <DataGridTextColumn Header="Categoria" Binding="{Binding Category}" IsReadOnly="True" Width="95" ElementStyle="{StaticResource CellText}"/>
+                                <DataGridTextColumn Header="A cosa serve" Binding="{Binding Purpose}" IsReadOnly="True" Width="*" ElementStyle="{StaticResource CellTextWrap}"/>
+                                <DataGridTextColumn Header="Stato sul PC" Binding="{Binding SystemStatus}" IsReadOnly="True" Width="115" ElementStyle="{StaticResource CellText}"/>
+                                <DataGridTextColumn Header="Avanzamento" Binding="{Binding RunStatus}" IsReadOnly="True" Width="125" ElementStyle="{StaticResource CellText}"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <!-- ===================== SCHEDA SCHERMO ===================== -->
+            <TabItem Header="Schermo">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <Grid Margin="0,0,4,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Grid.Row="0" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="14,8" Margin="0,0,0,8">
+                            <StackPanel>
+                                <TextBlock Text="Schermo attuale" Style="{StaticResource CardTitle}"/>
+                                <TextBlock x:Name="TxtDisplayInfo" Text="Lettura in corso..." FontSize="13" Foreground="#F8FAFC" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                                <Border Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="14,8" Margin="0,0,0,8">
+                                    <StackPanel>
+                                        <TextBlock Text="Orientamento" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock Style="{StaticResource CardHint}"
+                                                   Text="Rotazioni relative all'orientamento attuale: se non e quello giusto, prova un altro pulsante."/>
+                                        <WrapPanel Orientation="Horizontal">
+                                            <Button x:Name="BtnRotate90" Content="Ruota di 90 gradi" Style="{StaticResource ToolbarBtn}" Margin="0,0,8,4"/>
+                                            <Button x:Name="BtnRotate180" Content="Capovolgi (180 gradi)" Style="{StaticResource ToolbarBtn}" Margin="0,0,8,4"/>
+                                            <Button x:Name="BtnRotate270" Content="Ruota di 270 gradi" Style="{StaticResource ToolbarBtn}" Margin="0,0,8,4"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="14,8">
+                                    <StackPanel>
+                                        <TextBlock Text="Touch" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="TxtTouchInfo" Text="Diagnosi in corso..." FontSize="12" Foreground="#F8FAFC" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                        <WrapPanel Orientation="Horizontal">
+                                            <Button x:Name="BtnTouchDiag" Content="Diagnosi touch" Style="{StaticResource ToolbarBtn}" Margin="0,0,8,4"/>
+                                            <Button x:Name="BtnTouchRepair" Content="Ripara touch" Style="{StaticResource ToolbarBtn}" Margin="0,0,8,4"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Margin="4,0,0,0">
+                                <Border Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="14,8" Margin="0,0,0,8">
+                                    <StackPanel>
+                                        <TextBlock Text="Risoluzione" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock Style="{StaticResource CardHint}"
+                                                   Text="1280 x 800 e la meta esatta della nativa: con la scalatura a numeri interi di Intel Graphics Command Center resta nitida e i giochi girano molto piu leggeri."/>
+                                        <WrapPanel Orientation="Horizontal">
+                                            <Button x:Name="BtnResNative" Content="Nativa" Style="{StaticResource ToolbarBtn}" Margin="0,0,8,4"/>
+                                            <Button x:Name="BtnRes1920" Content="1920 x 1200" Style="{StaticResource ToolbarBtn}" Margin="0,0,8,4"/>
+                                            <Button x:Name="BtnRes1280" Content="1280 x 800" Style="{StaticResource ToolbarBtn}" Margin="0,0,8,4"/>
+                                        </WrapPanel>
+                                        <TextBlock Style="{StaticResource CardHint}" Margin="0,2,0,0"
+                                                   Text="Ogni cambio chiede conferma per 15 secondi, altrimenti torna allo stato precedente."/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="14,8">
+                                    <StackPanel>
+                                        <TextBlock Text="Rotazione automatica" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="TxtRotationLock" Text="Stato: lettura in corso..." FontSize="12" Foreground="#F8FAFC" TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                        <WrapPanel Orientation="Horizontal">
+                                            <Button x:Name="BtnRotationLock" Content="Blocca rotazione automatica" Style="{StaticResource ToolbarBtn}" Margin="0,0,8,4"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
+        </TabControl>
 
         <!-- BARRA DI AVANZAMENTO -->
         <Border Grid.Row="3" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,10">
@@ -704,7 +1209,7 @@ $pnpErrCount = Update-DriverDetection -Items $DriverItems
                        Text="Nota: Intel PCH Chipset Init Kit (.bin OEM) escluso perche non installabile da Windows."/>
             <StackPanel Grid.Column="1" Orientation="Horizontal">
                 <Button x:Name="BtnCancel" Content="Annulla" Style="{StaticResource DangerBtn}" IsEnabled="False"/>
-                <Button x:Name="BtnInstall" Content="Installa Driver Selezionati" Style="{StaticResource PrimaryBtn}" Margin="0"/>
+                <Button x:Name="BtnInstall" Content="Installa Driver Selezionati" Style="{StaticResource PrimaryBtn}" Margin="0" MinWidth="230"/>
             </StackPanel>
         </Grid>
     </Grid>
@@ -720,10 +1225,14 @@ $Ctrl = @{}
     'BtnSelectAll', 'BtnSelectMissing', 'BtnSelectEssential', 'BtnSelectNone', 'BtnRefresh', 'BtnDevMgmt',
     'ChkRestorePoint', 'ChkUseLocal', 'ChkCleanup',
     'GridDrivers', 'TxtProgressTitle', 'TxtProgressCount', 'ProgressTotal', 'ProgressStep',
-    'TxtLog', 'TxtFooterInfo', 'BtnCancel', 'BtnInstall'
+    'TxtLog', 'TxtFooterInfo', 'BtnCancel', 'BtnInstall',
+    'MainTabs', 'GridApps', 'BtnAppRecommended', 'BtnAppAll', 'BtnAppNone', 'BtnAppRefresh',
+    'TxtDisplayInfo', 'BtnRotate90', 'BtnRotate180', 'BtnRotate270', 'TxtRotationLock', 'BtnRotationLock',
+    'BtnResNative', 'BtnRes1920', 'BtnRes1280', 'TxtTouchInfo', 'BtnTouchDiag', 'BtnTouchRepair'
 ) | ForEach-Object { $Ctrl[$_] = $Window.FindName($_) }
 
 $Ctrl.GridDrivers.ItemsSource = $DriverItems
+$Ctrl.GridApps.ItemsSource = $AppItems
 
 $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
 $osLabel = if ($osInfo) { "$($osInfo.Caption) ($($osInfo.BuildNumber))" } else { "Windows 11" }
@@ -738,7 +1247,12 @@ $Sync = [hashtable]::Synchronized(@{
     IsRunning       = $false
     CancelRequested = $false
     DirtyGrid       = $false
-    LogQueue        = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    DirtyApps       = $false
+    Mode            = 'drivers'
+    AppsDetected    = $false
+    AppDetectRunning = $false
+    DisplayShown    = $false
+    LogQueue       = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
     ProgressTitle   = "Pronto per l'installazione."
     ProgressCount   = "0 / 0"
     TotalPct        = 0
@@ -749,6 +1263,8 @@ $Sync = [hashtable]::Synchronized(@{
     ErrorCount      = 0
     LogFilePath     = ""
     Items           = $DriverItems
+    AppItems        = $AppItems
+    Runners         = @{}
 })
 
 function Write-UiLog {
@@ -757,8 +1273,396 @@ function Write-UiLog {
     $Sync.LogQueue.Enqueue("[$ts] $Message")
 }
 
-Write-UiLog "Utility avviata. Rilevati $($DriverItems.Count) pacchetti driver per OneXPlayer 1S."
+Write-UiLog "Utility avviata. Rilevati $($DriverItems.Count) pacchetti driver e $($AppItems.Count) programmi per OneXPlayer 1S."
 Write-UiLog "Dispositivi PnP con problemi sul sistema: $pnpErrCount"
+
+# ---------------------------------------------------------------------------
+# 7b. Funzioni comuni: pulsanti, rilevamento programmi, schermo, touch
+# ---------------------------------------------------------------------------
+$FooterDrivers = "Nota: Intel PCH Chipset Init Kit (.bin OEM) escluso perche non installabile da Windows."
+$FooterApps    = "I programmi si installano con winget; la grafica aggiornata arriva da Intel Driver & Support Assistant."
+$FooterScreen  = "Ogni modifica dello schermo chiede conferma entro 15 secondi, altrimenti torna allo stato precedente."
+
+function Set-PresetButtons {
+    param([bool]$Enabled)
+    foreach ($n in @('BtnSelectAll', 'BtnSelectMissing', 'BtnSelectEssential', 'BtnSelectNone', 'BtnRefresh',
+                     'BtnAppRecommended', 'BtnAppAll', 'BtnAppNone', 'BtnAppRefresh')) {
+        $Ctrl[$n].IsEnabled = $Enabled
+    }
+}
+
+# Testo e stato di BtnInstall secondo la scheda attiva e la coda in corso.
+function Update-InstallButton {
+    $running = [bool]$Sync.IsRunning
+    switch ($Ctrl.MainTabs.SelectedIndex) {
+        0 { $Ctrl.BtnInstall.Content = "Installa Driver Selezionati"; $Ctrl.BtnInstall.IsEnabled = (-not $running); $Ctrl.TxtFooterInfo.Text = $FooterDrivers }
+        1 { $Ctrl.BtnInstall.Content = "Installa Programmi Selezionati"; $Ctrl.BtnInstall.IsEnabled = (-not $running); $Ctrl.TxtFooterInfo.Text = $FooterApps }
+        default { $Ctrl.BtnInstall.Content = "Installa"; $Ctrl.BtnInstall.IsEnabled = $false; $Ctrl.TxtFooterInfo.Text = $FooterScreen }
+    }
+}
+
+# --- Rilevamento programmi (asincrono: winget export impiega circa 30 secondi) ---
+function Start-AppDetection {
+    if ($Sync.AppDetectRunning) { return }
+    $Sync.AppDetectRunning = $true
+
+    $wingetPath = $null
+    $wingetCmd = Get-Command winget.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($wingetCmd) { $wingetPath = [string]$wingetCmd.Source }
+
+    foreach ($i in $AppItems) { $i.SystemStatus = "Analisi..." }
+    try { $Ctrl.GridApps.Items.Refresh() } catch {}
+    Write-UiLog "Rilevamento programmi avviato (winget export, circa 30 secondi)..."
+
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.Open()
+    $rs.SessionStateProxy.SetVariable('Sync', $Sync)
+    $rs.SessionStateProxy.SetVariable('AppItems', $AppItems)
+    $rs.SessionStateProxy.SetVariable('WingetPath', $wingetPath)
+
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        function Log-Det([string]$Msg) { $Sync.LogQueue.Enqueue("[" + (Get-Date).ToString("HH:mm:ss") + "] " + $Msg) }
+        try {
+            $installed = $null
+            if ($WingetPath) {
+                $dir = Join-Path $env:TEMP "OXP1S-Drivers"
+                New-Item -ItemType Directory -Path $dir -Force | Out-Null
+                $json = Join-Path $dir "winget_export.json"
+                if (Test-Path -LiteralPath $json) { Remove-Item -LiteralPath $json -Force -ErrorAction SilentlyContinue }
+
+                $psi = New-Object System.Diagnostics.ProcessStartInfo
+                $psi.FileName = $WingetPath
+                $psi.Arguments = "export -o `"$json`" --source winget --accept-source-agreements --disable-interactivity"
+                $psi.UseShellExecute = $false
+                $psi.CreateNoWindow = $true
+                $psi.RedirectStandardOutput = $true
+                $psi.RedirectStandardError = $true
+                $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+                $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+                $proc = New-Object System.Diagnostics.Process
+                $proc.StartInfo = $psi
+                [void]$proc.Start()
+                $outTask = $proc.StandardOutput.ReadToEndAsync()
+                $errTask = $proc.StandardError.ReadToEndAsync()
+                if (-not $proc.WaitForExit(240000)) {
+                    try { $proc.Kill() } catch {}
+                    Log-Det "winget export: tempo scaduto (4 minuti)."
+                }
+                try { [void]$outTask.Wait(5000) } catch {}
+                try { [void]$errTask.Wait(5000) } catch {}
+
+                if (Test-Path -LiteralPath $json) {
+                    $data = Get-Content -LiteralPath $json -Raw -Encoding UTF8 | ConvertFrom-Json
+                    $set = @{}
+                    foreach ($s in @($data.Sources)) {
+                        foreach ($p in @($s.Packages)) {
+                            if ($p.PackageIdentifier) { $set[([string]$p.PackageIdentifier).ToLowerInvariant()] = $true }
+                        }
+                    }
+                    $installed = $set
+                    Log-Det "winget export: $($set.Count) pacchetti letti."
+                } else {
+                    Log-Det "winget export non ha prodotto il file elenco."
+                }
+            }
+
+            foreach ($item in $AppItems) {
+                $def = $item.Def
+                if ($def.AppxName) {
+                    $found = $false
+                    try { $found = [bool](Get-AppxPackage -Name $def.AppxName -ErrorAction SilentlyContinue) } catch {}
+                    $item.SystemStatus = if ($found) { "Installato" } else { "Non installato" }
+                } elseif (-not $WingetPath) {
+                    $item.SystemStatus = "winget assente"
+                } elseif ($null -eq $installed) {
+                    $item.SystemStatus = "Non determinato"
+                } elseif ($installed.ContainsKey(([string]$def.Id).ToLowerInvariant())) {
+                    $item.SystemStatus = "Installato"
+                } else {
+                    $item.SystemStatus = "Non installato"
+                }
+            }
+            Log-Det "Rilevamento programmi completato."
+        } catch {
+            foreach ($item in $AppItems) { if ($item.SystemStatus -eq "Analisi...") { $item.SystemStatus = "Non determinato" } }
+            Log-Det "Errore nel rilevamento programmi: $($_.Exception.Message)"
+        } finally {
+            $Sync.DirtyApps = $true
+            $Sync.AppDetectRunning = $false
+        }
+    })
+    $Sync.Runners['Detect'] = $ps
+    $null = $ps.BeginInvoke()
+}
+
+# --- Schermo ---
+$AutoRotKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AutoRotation'
+
+function Update-DisplayInfo {
+    $c = $null
+    try { $c = [OxpDisplay]::Current() } catch {}
+    if (-not $c) { $Ctrl.TxtDisplayInfo.Text = "Impossibile leggere le impostazioni dello schermo."; return }
+    $deg = [int]$c[2] * 90
+    $Ctrl.TxtDisplayInfo.Text = "Risoluzione: $($c[0]) x $($c[1])   |   Orientamento: $deg gradi   |   Frequenza: $($c[3]) Hz"
+}
+
+function Get-RotationLocked {
+    try {
+        $v = (Get-ItemProperty -LiteralPath $AutoRotKey -Name 'Enable' -ErrorAction Stop).Enable
+        return ([int]$v -eq 0)
+    } catch { return $false }
+}
+
+function Update-RotationLockInfo {
+    if (Get-RotationLocked) {
+        $Ctrl.TxtRotationLock.Text = "Stato: rotazione automatica BLOCCATA."
+        $Ctrl.BtnRotationLock.Content = "Sblocca rotazione automatica"
+    } else {
+        $Ctrl.TxtRotationLock.Text = "Stato: rotazione automatica attiva."
+        $Ctrl.BtnRotationLock.Content = "Blocca rotazione automatica"
+    }
+}
+
+function Invoke-ToggleRotationLock {
+    $newValue = if (Get-RotationLocked) { 1 } else { 0 }
+    try {
+        if (-not (Test-Path -LiteralPath $AutoRotKey)) { New-Item -Path $AutoRotKey -Force | Out-Null }
+        New-ItemProperty -LiteralPath $AutoRotKey -Name 'Enable' -PropertyType DWord -Value $newValue -Force | Out-Null
+        $what = if ($newValue -eq 0) { "bloccata" } else { "attiva" }
+        Write-UiLog "Rotazione automatica: ora $what (Enable=$newValue). Potrebbe servire uscire e rientrare in Windows perche abbia effetto."
+    } catch {
+        Write-UiLog "Impossibile cambiare il blocco rotazione: $($_.Exception.Message)"
+    }
+    Update-RotationLockInfo
+}
+
+# Unico punto di modifica dello schermo: prova, applica, chiede conferma (15 s), altrimenti ripristina.
+function Invoke-DisplayChange {
+    param([string]$Description, [int]$W, [int]$H, [int]$Orient, [int]$Freq)
+
+    $old = [OxpDisplay]::Current()
+    if (-not $old) { Write-UiLog "Schermo: impossibile leggere lo stato attuale. Nessuna modifica."; return }
+    Write-UiLog "Schermo: $Description (richiesto $W x $H, orientamento $($Orient * 90) gradi)."
+
+    $useFreq = $Freq
+    $r = [OxpDisplay]::Apply($W, $H, $Orient, $useFreq, $true)
+    if ($r -ne 0 -and $useFreq -gt 0) {
+        $useFreq = 0
+        $r = [OxpDisplay]::Apply($W, $H, $Orient, 0, $true)
+    }
+    if ($r -ne 0) {
+        Write-UiLog "Schermo: il driver non accetta questa modalita (codice $r). Nessuna modifica."
+        return
+    }
+
+    $r = [OxpDisplay]::Apply($W, $H, $Orient, $useFreq, $false)
+    if ($r -ne 0) {
+        Write-UiLog "Schermo: applicazione non riuscita (codice $r)."
+        Update-DisplayInfo
+        return
+    }
+    Write-UiLog "Schermo: modifica applicata, attendo la conferma (15 secondi)..."
+
+    $ans = [OxpDisplay]::AskKeep("Mantenere questa impostazione dello schermo?", "OneXPlayer 1S - Schermo", 15)
+    if ($ans -eq 6) {
+        Write-UiLog "Schermo: impostazione confermata."
+    } else {
+        $why = if ($ans -eq 32000) { "nessuna risposta entro 15 secondi" } else { "risposta No" }
+        $rr = [OxpDisplay]::Apply($old[0], $old[1], $old[2], $old[3], $false)
+        if ($rr -ne 0) { $rr = [OxpDisplay]::Apply($old[0], $old[1], $old[2], 0, $false) }
+        Write-UiLog "Schermo: $why, ripristino di $($old[0]) x $($old[1]) a $($old[2] * 90) gradi (codice $rr)."
+    }
+    Update-DisplayInfo
+}
+
+function Invoke-Rotate {
+    param([int]$Steps)
+    $c = [OxpDisplay]::Current()
+    if (-not $c) { Write-UiLog "Schermo: impossibile leggere lo stato attuale."; return }
+    $newO = ([int]$c[2] + $Steps) % 4
+    $w = [int]$c[0]; $h = [int]$c[1]
+    if (($newO % 2) -ne ([int]$c[2] % 2)) { $w = [int]$c[1]; $h = [int]$c[0] }
+    Invoke-DisplayChange -Description "rotazione di $($Steps * 90) gradi" -W $w -H $h -Orient $newO -Freq ([int]$c[3])
+}
+
+function Invoke-SetResolution {
+    param([ValidateSet('native', '1920', '1280')][string]$Which)
+    $c = [OxpDisplay]::Current()
+    if (-not $c) { Write-UiLog "Schermo: impossibile leggere lo stato attuale."; return }
+    $modes = @([OxpDisplay]::Modes())
+    $landscape = ([int]$c[0] -ge [int]$c[1])
+
+    $long = 0; $short = 0
+    switch ($Which) {
+        'native' {
+            $best = $null
+            foreach ($m in $modes) {
+                if (-not $best -or ([long]$m[0] * [long]$m[1]) -gt ([long]$best[0] * [long]$best[1])) { $best = $m }
+            }
+            if ($best) { $long = [Math]::Max([int]$best[0], [int]$best[1]); $short = [Math]::Min([int]$best[0], [int]$best[1]) }
+        }
+        '1920' { $long = 1920; $short = 1200 }
+        '1280' { $long = 1280; $short = 800 }
+    }
+    if ($long -eq 0) { Write-UiLog "Schermo: nessuna modalita elencata dal driver video."; return }
+
+    $w = if ($landscape) { $long } else { $short }
+    $h = if ($landscape) { $short } else { $long }
+
+    $available = $false
+    foreach ($m in $modes) { if ([int]$m[0] -eq $w -and [int]$m[1] -eq $h) { $available = $true; break } }
+    if (-not $available) {
+        Write-UiLog "Schermo: la risoluzione $w x $h non e disponibile con il driver video attuale (con il driver video di base ne compaiono poche). Nessuna modifica."
+        return
+    }
+    if ([int]$c[0] -eq $w -and [int]$c[1] -eq $h) {
+        Write-UiLog "Schermo: la risoluzione $w x $h e gia impostata."
+        return
+    }
+    Invoke-DisplayChange -Description "risoluzione $w x $h" -W $w -H $h -Orient ([int]$c[2]) -Freq ([int]$c[3])
+}
+
+# --- Touch: diagnosi (sola lettura) e riparazione ---
+$TouchPciRegex = '^PCI\\VEN_8086&DEV_(A0C5|A0C6|A0D8|A0D9|A0E8|A0E9|A0EA|A0EB)'
+$TouchGateKey  = 'HKCU:\Software\Microsoft\Wisp\Touch'
+
+# Logica pura dei verdetti: riceve gli elenchi e il valore di TouchGate, non tocca il sistema.
+function Get-TouchVerdict {
+    param($I2cControllers, $I2cHid, $TouchScreens, $TouchGate)
+    $ctrl  = @($I2cControllers)
+    $hid   = @($I2cHid)
+    $touch = @($TouchScreens)
+
+    $pciBad = @($ctrl | Where-Object { ([string]$_.PNPDeviceID) -match $TouchPciRegex -and [int]$_.ConfigManagerErrorCode -ne 0 })
+    $ctrlOk = @($ctrl | Where-Object { [int]$_.ConfigManagerErrorCode -eq 0 })
+    if ($pciBad.Count -gt 0 -or $ctrlOk.Count -eq 0) {
+        return [PSCustomObject]@{ Verdict = 'SerialIoMissing'
+            Message = "Manca il driver Intel Serial IO (controller I2C assente o in errore). Installa il driver n. 2 dalla scheda Driver e riavvia." }
+    }
+    if ($null -ne $TouchGate -and [int]$TouchGate -eq 0) {
+        return [PSCustomObject]@{ Verdict = 'TouchDisabledByUser'
+            Message = "Il touch e disattivato nelle impostazioni dell'utente (TouchGate = 0). Usa Ripara touch per riattivarlo." }
+    }
+    $touchOk = @($touch | Where-Object { [int]$_.ConfigManagerErrorCode -eq 0 })
+    if ($touchOk.Count -gt 0) {
+        return [PSCustomObject]@{ Verdict = 'TouchOk'
+            Message = "Per Windows il touch e attivo. Se non risponde, prova Ripara touch e poi uno spegnimento completo." }
+    }
+    $bad = @($hid | Where-Object { [int]$_.ConfigManagerErrorCode -ne 0 }) + @($touch | Where-Object { [int]$_.ConfigManagerErrorCode -ne 0 })
+    if ($bad.Count -gt 0) {
+        return [PSCustomObject]@{ Verdict = 'TouchDeviceError'
+            Message = "Un dispositivo del touch e in errore o disattivato. Usa Ripara touch." }
+    }
+    return [PSCustomObject]@{ Verdict = 'TouchNotEnumerated'
+        Message = "Il touchscreen non viene elencato dal firmware. Spegni del tutto il dispositivo (non riavviare), riaccendi e ripeti la diagnosi; se resta cosi controlla il BIOS o il cavo dello schermo." }
+}
+
+function Get-TouchDiagnosis {
+    $all = @()
+    try { $all = @(Get-CimInstance -ClassName Win32_PnPEntity -ErrorAction Stop) } catch {}
+    $i2c = @(); $gpio = @(); $hid = @(); $touch = @()
+    foreach ($d in $all) {
+        $id  = [string]$d.PNPDeviceID
+        $svc = [string]$d.Service
+        $compat = (@($d.CompatibleID) -join ';')
+        $hw     = (@($d.HardwareID) -join ';')
+        if ($id -match $TouchPciRegex -or $svc -like 'iaLPSS2_I2C*') { $i2c += $d }
+        if ($id -like 'ACPI\INT34C5*' -or $svc -like 'iaLPSS2_GPIO*') { $gpio += $d }
+        if ($compat -match 'ACPI\\PNP0C50') { $hid += $d }
+        if ($hw -match 'HID_DEVICE_UP:000D_U:0004') { $touch += $d }
+    }
+    $gate = $null
+    try { $gate = (Get-ItemProperty -LiteralPath $TouchGateKey -Name 'TouchGate' -ErrorAction Stop).TouchGate } catch {}
+
+    $v = Get-TouchVerdict -I2cControllers $i2c -I2cHid $hid -TouchScreens $touch -TouchGate $gate
+    return [PSCustomObject]@{
+        I2cControllers = $i2c
+        Gpio           = $gpio
+        I2cHid         = $hid
+        TouchScreens   = $touch
+        TouchGate      = $gate
+        Verdict        = $v.Verdict
+        Message        = $v.Message
+    }
+}
+
+function Write-TouchGroup {
+    param([string]$Title, $Devices)
+    $list = @($Devices)
+    Write-UiLog "  $Title ($($list.Count)):"
+    foreach ($d in $list) {
+        Write-UiLog "    - $($d.Name) | stato $($d.Status) | codice $($d.ConfigManagerErrorCode)"
+    }
+}
+
+function Invoke-TouchDiag {
+    $diag = Get-TouchDiagnosis
+    Write-UiLog "Diagnosi touch:"
+    Write-TouchGroup -Title "Controller I2C (Serial IO)" -Devices $diag.I2cControllers
+    Write-TouchGroup -Title "Controller GPIO" -Devices $diag.Gpio
+    Write-TouchGroup -Title "Dispositivi HID su I2C" -Devices $diag.I2cHid
+    Write-TouchGroup -Title "Touch screen" -Devices $diag.TouchScreens
+    $gateText = if ($null -eq $diag.TouchGate) { "non impostato" } else { [string]$diag.TouchGate }
+    Write-UiLog "  TouchGate: $gateText"
+    Write-UiLog "  Esito: $($diag.Verdict) - $($diag.Message)"
+    $Ctrl.TxtTouchInfo.Text = $diag.Message
+    return $diag
+}
+
+function Repair-Touch {
+    if ($Sync.IsRunning) { Write-UiLog "Touch: attendi la fine della coda di installazione."; return }
+    $diag = Invoke-TouchDiag
+
+    if ($diag.Verdict -eq 'SerialIoMissing') {
+        $res = [System.Windows.MessageBox]::Show(
+            "Manca il driver Intel Serial IO, da cui dipende il touch.`n`nVuoi preparare l'installazione di Intel Serial IO? Verra selezionato solo quel driver nella scheda Driver: poi premi Installa Driver Selezionati.",
+            "Touch", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
+        if ($res -eq [System.Windows.MessageBoxResult]::Yes) {
+            foreach ($i in $DriverItems) { $i.IsSelected = ($i.Id -eq 'serialio') }
+            $Ctrl.GridDrivers.Items.Refresh()
+            $Ctrl.MainTabs.SelectedIndex = 0
+            Write-UiLog "Touch: selezionato solo Intel Serial IO. Premi Installa Driver Selezionati e poi riavvia."
+        }
+        return
+    }
+
+    Write-UiLog "Riparazione touch avviata."
+    if ($null -ne $diag.TouchGate -and [int]$diag.TouchGate -eq 0) {
+        try {
+            if (-not (Test-Path -LiteralPath $TouchGateKey)) { New-Item -Path $TouchGateKey -Force | Out-Null }
+            New-ItemProperty -LiteralPath $TouchGateKey -Name 'TouchGate' -PropertyType DWord -Value 1 -Force | Out-Null
+            Write-UiLog "  TouchGate impostato a 1 (touch riattivato)."
+        } catch { Write-UiLog "  TouchGate non modificato: $($_.Exception.Message)" }
+    }
+
+    foreach ($d in (@($diag.I2cHid) + @($diag.TouchScreens))) {
+        if ([int]$d.ConfigManagerErrorCode -eq 22) {
+            try {
+                Enable-PnpDevice -InstanceId $d.PNPDeviceID -Confirm:$false -ErrorAction Stop
+                Write-UiLog "  Riattivato: $($d.Name)"
+            } catch { Write-UiLog "  Riattivazione non riuscita ($($d.Name)): $($_.Exception.Message)" }
+        }
+    }
+
+    foreach ($d in @($diag.I2cHid)) {
+        try {
+            Disable-PnpDevice -InstanceId $d.PNPDeviceID -Confirm:$false -ErrorAction Stop
+            Enable-PnpDevice -InstanceId $d.PNPDeviceID -Confirm:$false -ErrorAction Stop
+            Write-UiLog "  Riavviato: $($d.Name)"
+        } catch { Write-UiLog "  Riavvio non riuscito ($($d.Name)): $($_.Exception.Message)" }
+    }
+
+    try {
+        $scan = & pnputil.exe /scan-devices 2>&1 | Out-String
+        Write-UiLog "  pnputil /scan-devices: $($scan.Trim())"
+    } catch { Write-UiLog "  pnputil /scan-devices non riuscito: $($_.Exception.Message)" }
+
+    Start-Sleep -Seconds 2
+    $after = Invoke-TouchDiag
+    Write-UiLog "Riparazione touch terminata. Nuovo esito: $($after.Verdict)"
+}
 
 # ---------------------------------------------------------------------------
 # 8. Gestori pulsanti Toolbar
@@ -796,6 +1700,56 @@ $Ctrl.BtnDevMgmt.Add_Click({
     Start-Process "devmgmt.msc"
 })
 
+$Ctrl.BtnAppRecommended.Add_Click({
+    foreach ($i in $AppItems) { $i.IsSelected = [bool]$i.Def.Recommended }
+    $Ctrl.GridApps.Items.Refresh()
+})
+
+$Ctrl.BtnAppAll.Add_Click({
+    foreach ($i in $AppItems) { $i.IsSelected = $true }
+    $Ctrl.GridApps.Items.Refresh()
+})
+
+$Ctrl.BtnAppNone.Add_Click({
+    foreach ($i in $AppItems) { $i.IsSelected = $false }
+    $Ctrl.GridApps.Items.Refresh()
+})
+
+$Ctrl.BtnAppRefresh.Add_Click({
+    if ($Sync.IsRunning) { return }
+    $Sync.AppsDetected = $true
+    Start-AppDetection
+})
+
+$Ctrl.BtnRotate90.Add_Click({ Invoke-Rotate -Steps 1 })
+$Ctrl.BtnRotate180.Add_Click({ Invoke-Rotate -Steps 2 })
+$Ctrl.BtnRotate270.Add_Click({ Invoke-Rotate -Steps 3 })
+$Ctrl.BtnRotationLock.Add_Click({ Invoke-ToggleRotationLock })
+$Ctrl.BtnResNative.Add_Click({ Invoke-SetResolution -Which 'native' })
+$Ctrl.BtnRes1920.Add_Click({ Invoke-SetResolution -Which '1920' })
+$Ctrl.BtnRes1280.Add_Click({ Invoke-SetResolution -Which '1280' })
+$Ctrl.BtnTouchDiag.Add_Click({ [void](Invoke-TouchDiag) })
+$Ctrl.BtnTouchRepair.Add_Click({ Repair-Touch })
+
+# Cambio scheda: testo del pulsante principale, primo rilevamento programmi, stato dello schermo e del touch.
+$Ctrl.MainTabs.Add_SelectionChanged({
+    if ($args[1].OriginalSource -isnot [System.Windows.Controls.TabControl]) { return }
+    Update-InstallButton
+    $idx = $Ctrl.MainTabs.SelectedIndex
+    if ($idx -eq 1 -and -not $Sync.AppsDetected) {
+        $Sync.AppsDetected = $true
+        Start-AppDetection
+    }
+    if ($idx -eq 2) {
+        Update-DisplayInfo
+        Update-RotationLockInfo
+        if (-not $Sync.DisplayShown) {
+            $Sync.DisplayShown = $true
+            [void](Invoke-TouchDiag)
+        }
+    }
+})
+
 $Ctrl.BtnCancel.Add_Click({
     if ($Sync.IsRunning) {
         $Sync.CancelRequested = $true
@@ -825,6 +1779,11 @@ $UiTimer.Add_Tick({
         $Ctrl.GridDrivers.Items.Refresh()
     }
 
+    if ($Sync.DirtyApps) {
+        $Sync.DirtyApps = $false
+        try { $Ctrl.GridApps.Items.Refresh() } catch {}
+    }
+
     $Ctrl.TxtProgressTitle.Text = $Sync.ProgressTitle
     $Ctrl.TxtProgressCount.Text = $Sync.ProgressCount
     $Ctrl.ProgressTotal.Value   = $Sync.TotalPct
@@ -834,20 +1793,29 @@ $UiTimer.Add_Tick({
         $Sync.Finished = $false
         $Sync.IsRunning = $false
 
-        $Ctrl.BtnInstall.IsEnabled = $true
         $Ctrl.BtnCancel.IsEnabled  = $false
-        $Ctrl.BtnSelectAll.IsEnabled = $true
-        $Ctrl.BtnSelectMissing.IsEnabled = $true
-        $Ctrl.BtnSelectEssential.IsEnabled = $true
-        $Ctrl.BtnSelectNone.IsEnabled = $true
-        $Ctrl.BtnRefresh.IsEnabled = $true
+        Set-PresetButtons $true
+        Update-InstallButton
+
+        $summary = "Operazione completata.`nCompletati: $($Sync.SuccessCount) | Errori: $($Sync.ErrorCount)`nLog: $($Sync.LogFilePath)"
+
+        if ($Sync.Mode -eq 'apps') {
+            try { $Ctrl.GridApps.Items.Refresh() } catch {}
+            [System.Windows.MessageBox]::Show(
+                $summary,
+                "Installazione Programmi Completata",
+                [System.Windows.MessageBoxButton]::OK,
+                [System.Windows.MessageBoxImage]::Information
+            ) | Out-Null
+            Start-AppDetection
+            return
+        }
 
         $errCnt = Update-DriverDetection -Items $DriverItems
         $Ctrl.TxtPnpWarnings.Text = "Dispositivi con errori/mancanti rilevati: $errCnt"
         $Ctrl.TxtPnpWarnings.Foreground = if ($errCnt -gt 0) { '#FBBF24' } else { '#94A3B8' }
         $Ctrl.GridDrivers.Items.Refresh()
 
-        $summary = "Operazione completata.`nCompletati: $($Sync.SuccessCount) | Errori: $($Sync.ErrorCount)`nLog: $($Sync.LogFilePath)"
         if ($Sync.RebootNeeded) {
             $res = [System.Windows.MessageBox]::Show(
                 "$summary`n`nAlmeno un driver richiede il riavvio per essere attivo. Vuoi riavviare il OneXPlayer ora?",
@@ -873,7 +1841,7 @@ $UiTimer.Start()
 # ---------------------------------------------------------------------------
 # 10. Avvio coda sequenziale in Background Runspace
 # ---------------------------------------------------------------------------
-$Ctrl.BtnInstall.Add_Click({
+function Start-DriverInstall {
     if ($Sync.IsRunning) { return }
 
     $selected = @($DriverItems | Where-Object { $_.IsSelected } | Sort-Object Order)
@@ -882,6 +1850,7 @@ $Ctrl.BtnInstall.Add_Click({
         return
     }
 
+    $Sync.Mode            = 'drivers'
     $Sync.IsRunning       = $true
     $Sync.CancelRequested = $false
     $Sync.Finished        = $false
@@ -896,13 +1865,9 @@ $Ctrl.BtnInstall.Add_Click({
     }
     $Ctrl.GridDrivers.Items.Refresh()
 
-    $Ctrl.BtnInstall.IsEnabled = $false
     $Ctrl.BtnCancel.IsEnabled  = $true
-    $Ctrl.BtnSelectAll.IsEnabled = $false
-    $Ctrl.BtnSelectMissing.IsEnabled = $false
-    $Ctrl.BtnSelectEssential.IsEnabled = $false
-    $Ctrl.BtnSelectNone.IsEnabled = $false
-    $Ctrl.BtnRefresh.IsEnabled = $false
+    Set-PresetButtons $false
+    Update-InstallButton
 
     $opts = @{
         CreateRestorePoint = [bool]$Ctrl.ChkRestorePoint.IsChecked
@@ -1179,10 +2144,199 @@ $Ctrl.BtnInstall.Add_Click({
         $Sync.StepPct = 100
         Log-Step "=== Fine sessione: OK=$($Sync.SuccessCount), Errori=$($Sync.ErrorCount), RebootNeeded=$($Sync.RebootNeeded) ==="
         $Sync.Finished = $true
-    }) | Out-Null
+    })
 
+    $Sync.Runners['Drivers'] = $ps
     $null = $ps.BeginInvoke()
+}
+
+# ---------------------------------------------------------------------------
+# 10b. Coda di installazione programmi (winget) in Background Runspace
+# ---------------------------------------------------------------------------
+function Start-AppInstall {
+    if ($Sync.IsRunning) { return }
+
+    $selected = @($AppItems | Where-Object { $_.IsSelected } | Sort-Object Order)
+    if ($selected.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("Seleziona almeno un programma da installare.", "Nessuna selezione", "OK", "Warning") | Out-Null
+        return
+    }
+
+    $wingetCmd = Get-Command winget.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $wingetCmd) {
+        $msg = 'winget non trovato su questo PC. Aggiorna "Programma di installazione app" dal Microsoft Store e riprova. Sulle edizioni LTSC winget non e incluso e va installato a parte.'
+        Write-UiLog $msg
+        [System.Windows.MessageBox]::Show($msg, "winget assente", "OK", "Warning") | Out-Null
+        return
+    }
+    $wingetPath = [string]$wingetCmd.Source
+
+    $Sync.Mode            = 'apps'
+    $Sync.IsRunning       = $true
+    $Sync.CancelRequested = $false
+    $Sync.Finished        = $false
+    $Sync.RebootNeeded    = $false
+    $Sync.SuccessCount    = 0
+    $Sync.ErrorCount      = 0
+    $Sync.TotalPct        = 0
+    $Sync.StepPct         = 0
+
+    foreach ($i in $AppItems) {
+        $i.RunStatus = if ($i.IsSelected) { "In coda" } else { "Saltato" }
+    }
+    try { $Ctrl.GridApps.Items.Refresh() } catch {}
+
+    $Ctrl.BtnCancel.IsEnabled = $true
+    Set-PresetButtons $false
+    Update-InstallButton
+
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.Open()
+    $rs.SessionStateProxy.SetVariable('Sync', $Sync)
+    $rs.SessionStateProxy.SetVariable('SelectedItems', $selected)
+    $rs.SessionStateProxy.SetVariable('WingetPath', $wingetPath)
+
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    [void]$ps.AddScript({
+        $workRoot = Join-Path $env:TEMP "OXP1S-Drivers"
+        $logDir   = Join-Path $workRoot "logs"
+        New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        $mainLog = Join-Path $logDir ("oxp1s_apps_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".log")
+        $Sync.LogFilePath = $mainLog
+
+        function Log-Step([string]$Msg) {
+            $ts = (Get-Date).ToString("HH:mm:ss")
+            $line = "[$ts] $Msg"
+            $Sync.LogQueue.Enqueue($line)
+            Add-Content -Path $mainLog -Value $line -Encoding UTF8
+        }
+
+        # Legge stdout e stderr in modo asincrono (evita lo stallo con due flussi) e aggiorna la barra del passo.
+        function Run-WingetCaptured([string]$FilePath, [string]$Arguments) {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $FilePath
+            $psi.Arguments = $Arguments
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+
+            $proc = New-Object System.Diagnostics.Process
+            $proc.StartInfo = $psi
+            [void]$proc.Start()
+            $outTask = $proc.StandardOutput.ReadToEndAsync()
+            $errTask = $proc.StandardError.ReadToEndAsync()
+
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $pct = 5
+            $timedOut = $false
+            while (-not $proc.WaitForExit(500)) {
+                if ($pct -lt 90) { $pct++ }
+                $Sync.StepPct = $pct
+                if ($sw.Elapsed.TotalMinutes -gt 30) {
+                    $timedOut = $true
+                    try { $proc.Kill() } catch {}
+                    break
+                }
+            }
+            $stdout = ""; $stderr = ""
+            try { if ($outTask.Wait(10000)) { $stdout = [string]$outTask.Result } } catch {}
+            try { if ($errTask.Wait(10000)) { $stderr = [string]$errTask.Result } } catch {}
+            $code = if ($timedOut) { -1 } else { $proc.ExitCode }
+            return [PSCustomObject]@{ ExitCode = $code; StdOut = $stdout; StdErr = $stderr; TimedOut = $timedOut }
+        }
+
+        # Solo righe con lettere: l'output di winget e pieno di caratteri della barra di avanzamento.
+        function Get-UsefulLines([string]$Text, [int]$Max) {
+            $lines = @(($Text -split "[\r\n]+") | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '[A-Za-z]' })
+            if ($lines.Count -gt $Max) { $lines = @($lines[($lines.Count - $Max)..($lines.Count - 1)]) }
+            return $lines
+        }
+
+        $okCodes = @(0, -1978335189, -1978335135)
+        $total = $SelectedItems.Count
+        $idx = 0
+
+        try {
+            Log-Step "=== Avvio installazione programmi ($total) con winget: $WingetPath ==="
+
+            foreach ($item in $SelectedItems) {
+                if ($Sync.CancelRequested) {
+                    Log-Step "Coda interrotta dall'utente prima di: $($item.Name)"
+                    break
+                }
+                $idx++
+                $def = $item.Def
+                $Sync.ProgressCount = "$idx / $total"
+                $Sync.TotalPct = [int]((($idx - 1) * 100) / $total)
+                $Sync.StepPct = 0
+                $Sync.ProgressTitle = "Installazione di $($def.Name) ($idx/$total)..."
+                $item.RunStatus = "Installazione..."
+                $Sync.DirtyApps = $true
+
+                $wargs = "install --id `"$($def.Id)`" --exact --source $($def.Source) --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"
+                Log-Step "--- [$idx/$total] $($def.Name) ---"
+                Log-Step "winget $wargs"
+
+                try {
+                    $res = Run-WingetCaptured -FilePath $WingetPath -Arguments $wargs
+                    $code = [int]$res.ExitCode
+                    Log-Step "ExitCode winget ($($def.Id)): $code"
+                    if ($okCodes -contains $code) {
+                        $item.RunStatus = "Completato"
+                        $Sync.SuccessCount++
+                    } else {
+                        $item.RunStatus = "Errore ($code)"
+                        $Sync.ErrorCount++
+                        if ($res.TimedOut) { Log-Step "Installazione interrotta: superati i 30 minuti." }
+                        $useful = @(Get-UsefulLines -Text ($res.StdOut + "`n" + $res.StdErr) -Max 8)
+                        foreach ($l in $useful) { Log-Step "    $l" }
+                    }
+                } catch {
+                    $item.RunStatus = "Errore"
+                    $Sync.ErrorCount++
+                    Log-Step "ECCEZIONE su $($def.Name): $($_.Exception.Message)"
+                }
+
+                $Sync.StepPct = 100
+                $Sync.DirtyApps = $true
+                $Sync.TotalPct = [int](($idx * 100) / $total)
+            }
+
+            foreach ($item in $SelectedItems) {
+                if ($item.RunStatus -eq "In coda") { $item.RunStatus = "Annullato" }
+            }
+            $Sync.DirtyApps = $true
+            $Sync.ProgressTitle = if ($Sync.CancelRequested) { "Operazione annullata." } else { "Sequenza terminata." }
+            Log-Step "=== Fine sessione programmi: OK=$($Sync.SuccessCount), Errori=$($Sync.ErrorCount) ==="
+        } catch {
+            Log-Step "ERRORE nella coda programmi: $($_.Exception.Message)"
+        } finally {
+            $Sync.StepPct = 100
+            $Sync.Finished = $true
+        }
+    })
+    $Sync.Runners['Apps'] = $ps
+    $null = $ps.BeginInvoke()
+}
+
+$Ctrl.BtnInstall.Add_Click({
+    if ($Sync.IsRunning) { return }
+    switch ($Ctrl.MainTabs.SelectedIndex) {
+        0 { Start-DriverInstall }
+        1 { Start-AppInstall }
+        default { }
+    }
 })
+
+# Stato iniziale del pulsante principale e delle informazioni dello schermo (sola lettura).
+$Ctrl.MainTabs.SelectedIndex = 0
+Update-InstallButton
+Update-DisplayInfo
+Update-RotationLockInfo
 
 # Avvia finestra WPF
 $Window.Add_Closed({ $UiTimer.Stop() })

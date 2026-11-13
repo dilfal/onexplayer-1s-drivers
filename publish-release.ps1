@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Crea il repository GitHub e pubblica la Release v1.0.0 con i 12 archivi driver .zip.
+    Crea il repository GitHub e pubblica la Release v1.0.0 con i 13 archivi driver .zip.
 .DESCRIPTION
     Usa GitHub CLI (gh). Il repository deve essere pubblico affinche `irm ... | iex`
     possa scaricare lo script e gli asset senza token.
@@ -18,16 +18,17 @@ $ErrorActionPreference = 'Stop'
 $RequiredZips = @(
     "chipset-10.1.18460.8229-public-mup.zip",
     "serialio_30.100.2013.5_pv_tgl-lp_20h1.zip",
-    "intel_(r)_csme_15.0.1.1345v4.2_b0_consumer.zip",
+    "me_2108.100.0.1053_tgl.zip",
     "intel(r)gna_pvcandidate_02.00.00.1010.zip",
     "intel(r)_dtt_8.7.10400.15556.zip",
     "igfx_win10_100.9616.zip",
     "Audio_2015.6.18_6.0.1.7541.zip",
     "wifi-phwfw01690_21.110.1.1_g.zip",
     "bt-phbtw12144_21.110.0.3g.zip",
-    "tbt_dch_sw_rev75.zip",
+    "tbt_dch_1.41.1054.0.zip",
     "9.Cardreader.zip",
-    "boschaccelerometer.zip"
+    "boschaccelerometer.zip",
+    "fingerprint_focaltech_2.0.3.71.zip"
 )
 
 Set-Location $PSScriptRoot
@@ -50,7 +51,7 @@ if (-not (Test-Path (Join-Path $PSScriptRoot ".git"))) {
     Write-Host "Inizializzazione repository Git..." -ForegroundColor Cyan
     git init -b main
     git add .gitignore Avvia.cmd oxp1s.ps1 publish-release.ps1 README.md
-    git commit -m "Initial commit: OneXPlayer 1S Driver Utility (Win11 Pro)"
+    git commit -m "Initial commit: OneXPlayer 1S Driver Utility (Windows 11)"
 }
 
 $prevEap = $ErrorActionPreference
@@ -78,11 +79,11 @@ $releaseExists = ($LASTEXITCODE -eq 0)
 $ErrorActionPreference = $prevEap
 
 if (-not $releaseExists) {
-    Write-Host "Creazione Release $ReleaseTag e upload dei 12 pacchetti driver (~1,34 GB)..." -ForegroundColor Green
+    Write-Host "Creazione Release $ReleaseTag e upload dei 13 pacchetti driver (~0,9 GB)..." -ForegroundColor Green
     gh release create $ReleaseTag @zipPaths `
         --repo $RepoName `
         --title "OneXPlayer 1S Drivers ($ReleaseTag)" `
-        --notes "Pacchetti driver ufficiali per OneXPlayer 1S (Windows 11 Pro) usati da oxp1s.ps1."
+        --notes "Pacchetti driver ufficiali per OneXPlayer 1S (Windows 11) usati da oxp1s.ps1."
     if ($LASTEXITCODE -ne 0) { throw "Errore creazione release $ReleaseTag" }
 } else {
     Write-Host "Release $ReleaseTag gia presente. Upload/aggiornamento asset..." -ForegroundColor Green
