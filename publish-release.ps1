@@ -53,8 +53,11 @@ if (-not (Test-Path (Join-Path $PSScriptRoot ".git"))) {
     git commit -m "Initial commit: OneXPlayer 1S Driver Utility (Win11 Pro)"
 }
 
-gh repo view $RepoName 2>$null | Out-Null
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+gh repo view $RepoName 1>$null 2>$null
 $repoExists = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $prevEap
 
 if (-not $repoExists) {
     Write-Host "Creazione repository pubblico $RepoName su GitHub..." -ForegroundColor Cyan
@@ -68,8 +71,11 @@ if (-not $repoExists) {
 
 $zipPaths = $RequiredZips | ForEach-Object { Join-Path $DriversSourceDir $_ }
 
-gh release view $ReleaseTag --repo $RepoName 2>$null | Out-Null
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+gh release view $ReleaseTag --repo $RepoName 1>$null 2>$null
 $releaseExists = ($LASTEXITCODE -eq 0)
+$ErrorActionPreference = $prevEap
 
 if (-not $releaseExists) {
     Write-Host "Creazione Release $ReleaseTag e upload dei 12 pacchetti driver (~1,34 GB)..." -ForegroundColor Green
