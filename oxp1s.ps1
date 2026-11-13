@@ -114,6 +114,7 @@ $DriverDefinitions = @(
         Category       = 'Sistema'
         PackageVersion = '15.0.1.1345'
         ZipName        = 'intel_(r)_csme_15.0.1.1345v4.2_b0_consumer.zip'
+        AssetName      = 'intel_.r._csme_15.0.1.1345v4.2_b0_consumer.zip'
         SizeMB         = 307.7
         Method         = 'EXE'
         MethodLabel    = 'EXE Silenzioso (MEI-Only)'
@@ -133,6 +134,7 @@ $DriverDefinitions = @(
         Category       = 'Sistema'
         PackageVersion = '02.00.00.1010'
         ZipName        = 'intel(r)gna_pvcandidate_02.00.00.1010.zip'
+        AssetName      = 'intel.r.gna_pvcandidate_02.00.00.1010.zip'
         SizeMB         = 0.5
         Method         = 'INF'
         MethodLabel    = 'INF (pnputil)'
@@ -151,6 +153,7 @@ $DriverDefinitions = @(
         Category       = 'Sistema'
         PackageVersion = '8.7.10400.15556'
         ZipName        = 'intel(r)_dtt_8.7.10400.15556.zip'
+        AssetName      = 'intel.r._dtt_8.7.10400.15556.zip'
         SizeMB         = 41.3
         Method         = 'EXE'
         MethodLabel    = 'EXE Silenzioso (Core)'
@@ -1029,7 +1032,11 @@ $Ctrl.BtnInstall.Add_Click({
 
             try {
                 # 1. Acquisizione ZIP (locale o download)
+                $remoteName = if ($def.AssetName) { $def.AssetName } else { $def.ZipName }
                 $zipPath = Find-LocalZip -ZipName $def.ZipName
+                if (-not $zipPath -and $remoteName -ne $def.ZipName) {
+                    $zipPath = Find-LocalZip -ZipName $remoteName
+                }
                 if ($zipPath) {
                     $item.RunStatus = "Locale trovato"
                     $Sync.DirtyGrid = $true
@@ -1037,8 +1044,8 @@ $Ctrl.BtnInstall.Add_Click({
                 } else {
                     $item.RunStatus = "Download..."
                     $Sync.DirtyGrid = $true
-                    $url = "$($Opts.ReleaseBaseUrl)/$($def.ZipName)"
-                    $destZip = Join-Path $zipDir $def.ZipName
+                    $url = "$($Opts.ReleaseBaseUrl)/$remoteName"
+                    $destZip = Join-Path $zipDir $remoteName
                     $partZip = "$destZip.part"
                     if (Test-Path -LiteralPath $partZip) { Remove-Item -LiteralPath $partZip -Force }
                     Log-Step "Download da: $url"
