@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     OneXPlayer 1S Driver Utility (Windows 11 Pro) - GUI stile Chris Titus WinUtil.
 .DESCRIPTION
@@ -8,6 +8,9 @@
 .EXAMPLE
     irm 070293.xyz/oxp-win | iex
     irm https://raw.githubusercontent.com/dilfal/onexplayer-1s-drivers/main/oxp1s.ps1 | iex
+.NOTES
+    Questo file va salvato in ASCII puro, SENZA BOM: con il BOM in testa `irm ... | iex`
+    non riconosce piu il blocco param e si ferma con un errore di sintassi.
 #>
 
 [CmdletBinding()]
@@ -84,6 +87,9 @@ $DriverDefinitions = @(
         OkCodes        = @(0, 1638)
         RebootCodes    = @(3010, 1641, 350)
         Essential      = $true
+        # Gli INF del chipset hanno versioni proprie (es. 10.1.24.x), non confrontabili con quella
+        # del pacchetto: la versione installata si legge solo dal registro Disinstallazione.
+        RegistryVersionOnly = $true
         MatchNames     = @('Intel.*Chipset', 'Tiger Lake.*LPC', 'Tiger Lake.*SMBus', 'System Interrupt Controller')
         MatchInfs      = @('TigerLake', 'CannonLake', 'CometLake', 'IceLake')
         UninstallMatch = 'Intel\(R\) Chipset Device Software'
@@ -113,6 +119,7 @@ $DriverDefinitions = @(
         Name           = 'Intel CSME / MEI-Only Driver'
         Category       = 'Sistema'
         PackageVersion = '15.0.1.1345'
+        DetectVersion  = '2031.15.0.1743'   # DriverVer di heci.inf: il kit ha un numero diverso dal driver
         ZipName        = 'intel_(r)_csme_15.0.1.1345v4.2_b0_consumer.zip'
         AssetName      = 'intel_.r._csme_15.0.1.1345v4.2_b0_consumer.zip'
         SizeMB         = 307.7
@@ -273,6 +280,7 @@ $DriverDefinitions = @(
         Name           = 'Realtek PCIE / USB Card Reader'
         Category       = 'Porte & Sensori'
         PackageVersion = 'RtsUer'
+        DetectVersion  = '10.0.19041.31261' # DriverVer di RtsUer.inf
         ZipName        = '9.Cardreader.zip'
         SizeMB         = 2.0
         Method         = 'INF'
@@ -314,7 +322,24 @@ function Get-SystemDriverSnapshot {
     $uninstallApps = @()
 
     try { $signedDrivers = @(Get-CimInstance -ClassName Win32_PnPSignedDriver -ErrorAction SilentlyContinue) } catch {}
-    try { $pnpErrors     = @(Get-PnpDevice -ErrorAction SilentlyContinue | Where-Object { $_.Status -and $_.Status -ne 'OK' }) } catch {}
+
+    # Solo dispositivi presenti e davvero in errore: senza -PresentOnly entrano nel conto anche
+    # tutti quelli scollegati (Status 'Unknown'). Quelli disattivati a mano non sono errori.
+    try {
+        $pnpErrors = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object {
+            ($_.Status -eq 'Error' -or $_.Status -eq 'Degraded') -and "$($_.Problem)" -ne 'CM_PROB_DISABLED'
+        })
+    } catch {}
+
+    # Win32_PnPSignedDriver.InfName riporta il nome pubblicato (oemNN.inf) e non quello originale:
+    # la corrispondenza oemNN.inf -> nome originale sta nel registro del Driver Store.
+    $infOriginal = @{}
+    try {
+        foreach ($k in @(Get-ChildItem -Path 'HKLM:\SYSTEM\DriverDatabase\DriverInfFiles' -ErrorAction SilentlyContinue)) {
+            $active = [string]$k.GetValue('Active')
+            if ($active -match '^(.+?\.inf)_') { $infOriginal[$k.PSChildName.ToLowerInvariant()] = $Matches[1] }
+        }
+    } catch {}
 
     $regPaths = @(
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
@@ -332,6 +357,7 @@ function Get-SystemDriverSnapshot {
         SignedDrivers = $signedDrivers
         PnpErrors     = $pnpErrors
         UninstallApps = $uninstallApps
+        InfOriginal   = $infOriginal
     }
 }
 
@@ -357,13 +383,16 @@ function Update-DriverDetection {
     foreach ($item in $Items) {
         $def = $item.Def
         $foundVer = $null
+        $matchedIds = @{}
 
-        # 1) Cerca tra i driver firmati attivi
+        # 1) Cerca tra i driver firmati attivi (per nome INF originale, poi per nome del dispositivo)
         foreach ($d in $snap.SignedDrivers) {
             $hit = $false
             if ($d.InfName) {
+                $infName = $snap.InfOriginal[$d.InfName.ToLowerInvariant()]
+                if (-not $infName) { $infName = $d.InfName }
                 foreach ($rx in $def.MatchInfs) {
-                    if ($d.InfName -imatch $rx) { $hit = $true; break }
+                    if ($infName -imatch $rx) { $hit = $true; break }
                 }
             }
             if (-not $hit -and $d.DeviceName) {
@@ -371,9 +400,11 @@ function Update-DriverDetection {
                     if ($d.DeviceName -imatch $rx) { $hit = $true; break }
                 }
             }
-            if ($hit -and $d.DriverVersion) {
-                $foundVer = $d.DriverVersion
-                break
+            if ($hit) {
+                if ($d.DeviceID) { $matchedIds[$d.DeviceID.ToUpperInvariant()] = $true }
+                if (-not $foundVer -and $d.DriverVersion -and -not $def.RegistryVersionOnly) {
+                    $foundVer = $d.DriverVersion
+                }
             }
         }
 
@@ -387,9 +418,10 @@ function Update-DriverDetection {
             }
         }
 
-        # 3) Controlla se ci sono errori PnP correlati
+        # 3) Controlla se ci sono errori PnP correlati (stesso dispositivo trovato sopra, o stesso nome)
         $hasError = $false
         foreach ($pe in $snap.PnpErrors) {
+            if ($pe.InstanceId -and $matchedIds.ContainsKey($pe.InstanceId.ToUpperInvariant())) { $hasError = $true; break }
             foreach ($rx in $def.MatchNames) {
                 if ($pe.FriendlyName -imatch $rx) { $hasError = $true; break }
             }
@@ -400,7 +432,8 @@ function Update-DriverDetection {
             $item.SystemStatus = "Errore dispositivo (!)"
             $item.NeedsInstall = $true
         } elseif ($foundVer) {
-            $cmp = Compare-DriverVersionSafe -Installed $foundVer -Package $def.PackageVersion
+            $pkgVer = if ($def.DetectVersion) { $def.DetectVersion } else { $def.PackageVersion }
+            $cmp = Compare-DriverVersionSafe -Installed $foundVer -Package $pkgVer
             if ($cmp -lt 0) {
                 $item.SystemStatus = "Aggiornabile ($foundVer)"
                 $item.NeedsInstall = $true
@@ -694,7 +727,7 @@ $Ctrl.GridDrivers.ItemsSource = $DriverItems
 
 $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
 $osLabel = if ($osInfo) { "$($osInfo.Caption) ($($osInfo.BuildNumber))" } else { "Windows 11" }
-$Ctrl.TxtSystemInfo.Text = "Admin OK • $osLabel"
+$Ctrl.TxtSystemInfo.Text = "Admin OK | $osLabel"
 $Ctrl.TxtPnpWarnings.Text = "Dispositivi con errori/mancanti rilevati: $pnpErrCount"
 $Ctrl.TxtPnpWarnings.Foreground = if ($pnpErrCount -gt 0) { '#FBBF24' } else { '#94A3B8' }
 

@@ -45,7 +45,7 @@ Oppure, da PowerShell indicando una cartella specifica:
 All'apertura, lo script analizza automaticamente il sistema (`Win32_PnPSignedDriver`, `Get-PnpDevice` e registro programmi installati) e mostra lo stato attuale di ciascun driver nella colonna **Stato sul PC**:
 
 - **`Non rilevato`**: driver non presente o non attivo sul sistema.
-- **`Errore dispositivo (!)`**: dispositivo rilevato in Gestione Dispositivi con stato diverso da `OK`.
+- **`Errore dispositivo (!)`**: dispositivo presente e segnalato in errore in Gestione Dispositivi (non contano quelli scollegati né quelli disattivati a mano).
 - **`Aggiornabile (...)`**: versione installata più vecchia di quella nel pacchetto.
 - **`Installato (...)`**: versione uguale o più recente già presente.
 
@@ -123,4 +123,5 @@ Se modifichi gli script in questa cartella:
   gh auth switch --user dilfal
   .\publish-release.ps1
   ```
+- **`oxp1s.ps1` va salvato in ASCII puro, senza BOM** (niente lettere accentate né simboli): con il BOM in testa `irm ... | iex` si ferma con un errore di sintassi sul blocco `param`, mentre `Avvia.cmd` continua a funzionare e nasconde il problema.
 - La scorciatoia `070293.xyz/oxp-win` (nel repo `dilfal/070293`) punta sempre al ramo `main` di `dilfal/onexplayer-1s-drivers`, quindi non va modificata quando aggiorni `oxp1s.ps1`.
