@@ -1276,6 +1276,8 @@ foreach ($di in $DriverItems) { $di.IsSelected = [bool]$di.NeedsInstall }
                                         <RadioButton x:Name="RbBootSteam" Content="Steam Big Picture" GroupName="BootMode" FontSize="12" Margin="0,0,12,4"/>
                                         <RadioButton x:Name="RbBootPlaynite" Content="Playnite a schermo intero" GroupName="BootMode" FontSize="12" Margin="0,0,0,4"/>
                                     </WrapPanel>
+                                    <CheckBox x:Name="ChkBootShell" Content="Al posto del desktop (avanzato, non provato)" IsChecked="False" IsEnabled="False"
+                                              FontSize="11.5" Margin="0,0,0,2"/>
                                     <Grid Margin="0,2,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
@@ -1397,7 +1399,7 @@ $Ctrl = @{}
     'MainTabs', 'GridApps', 'BtnAppRecommended', 'BtnAppAll', 'BtnAppNone', 'BtnAppRefresh',
     'TxtDisplayInfo', 'BtnRotate90', 'BtnRotate180', 'BtnRotate270', 'TxtRotationLock', 'BtnRotationLock',
     'BtnResNative', 'BtnRes1920', 'BtnRes1280', 'TxtTouchInfo', 'BtnTouchDiag', 'BtnTouchRepair',
-    'RbBootDesktop', 'RbBootSteam', 'RbBootPlaynite', 'TxtBootInfo', 'BtnBootApply',
+    'RbBootDesktop', 'RbBootSteam', 'RbBootPlaynite', 'ChkBootShell', 'TxtBootInfo', 'BtnBootApply',
     'BtnTweakRecommended', 'BtnTweakAll', 'BtnTweakNone', 'BtnTweakRefresh', 'BtnTweakUndo', 'GridTweaks',
     'RootScroll', 'RootGrid', 'HeaderBorder', 'ProgressBorder', 'LogBorder', 'BtnOpenScale', 'BtnOpenTyping', 'BtnOpenSignin', 'BtnOpenTouch', 'BtnOpenGaming', 'BtnOpenWinUtil'
 ) | ForEach-Object { $Ctrl[$_] = $Window.FindName($_) }
@@ -1848,7 +1850,8 @@ $FooterSystem = "Le ottimizzazioni sono reversibili con Ripristina selezionate; 
 # --- Avvio del dispositivo -------------------------------------------------
 # Avvio automatico ALL'ACCESSO, SOPRA il desktop normale: si scrive solo un valore nella chiave Run dell'utente.
 # Explorer resta la shell di Windows, quindi uscendo da Big Picture o da Playnite si torna al desktop.
-# Non si usa Shell Launcher e non si tocca Winlogon: niente sostituzione della shell.
+# Scelta predefinita: niente sostituzione della shell. L'opzione avanzata "al posto del desktop" (Shell di HKCU, vedi sotto)
+# e separata, esplicita e disattivata di default; non si usa mai Shell Launcher e non si tocca mai HKLM.
 $BootRunKey     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $BootRunName    = 'OXP1S-AvvioGioco'
 $BootBackupKey  = 'HKCU:\Software\OXP1S-Utility'
@@ -1924,29 +1927,256 @@ function Get-BootCurrentCommand {
     try { return [string](Get-ItemProperty -LiteralPath $BootRunKey -Name $BootRunName -ErrorAction Stop).$BootRunName } catch { return $null }
 }
 
-# Sola lettura: aggiorna i RadioButton e la riga di stato.
+# --- Avvio al posto del desktop (opzione avanzata, NON provata sul dispositivo) ---------------
+# Si scrive il valore stringa Shell in HKCU (solo per l'utente corrente, mai HKLM, niente Shell Launcher).
+# La shell non e il programma ma un piccolo avviatore (avvio-shell.ps1) che torna al desktop da solo
+# quando il programma si chiude o se qualcosa non va.
+$BootShellKey    = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon'
+$BootShellDir    = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'OXP1S-Utility' } else { 'C:\OXP1S-Utility' }
+$BootLauncherPath = Join-Path $BootShellDir 'avvio-shell.ps1'
+
+# Logica pura: comando da scrivere nel valore Shell.
+function Get-ShellLauncherCommand {
+    param([string]$LauncherPath)
+    return ('powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $LauncherPath + '"')
+}
+
+# Logica pura: il valore Shell e quello scritto da questa utility?
+function Test-ShellValueIsOurs {
+    param([string]$ShellValue, [string]$LauncherPath)
+    if ([string]::IsNullOrWhiteSpace($ShellValue) -or [string]::IsNullOrWhiteSpace($LauncherPath)) { return $false }
+    return ($ShellValue.IndexOf($LauncherPath, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+}
+
+# Logica pura: none (nessun valore Shell), steam, playnite, foreign (valore di altri o nostro senza modalita salvata).
+function Get-BootShellState {
+    param([string]$ShellValue, [string]$LauncherPath, [string]$ShellMode)
+    if ([string]::IsNullOrWhiteSpace($ShellValue)) { return 'none' }
+    if (Test-ShellValueIsOurs -ShellValue $ShellValue -LauncherPath $LauncherPath) {
+        if ($ShellMode -eq 'steam') { return 'steam' }
+        if ($ShellMode -eq 'playnite') { return 'playnite' }
+    }
+    return 'foreign'
+}
+
+# Logica pura: rende un testo come letterale PowerShell in ASCII puro (i caratteri non ASCII diventano [char]NNN).
+function ConvertTo-AsciiPsLiteral {
+    param([string]$Text)
+    $parts = New-Object System.Collections.ArrayList
+    $cur = New-Object System.Text.StringBuilder
+    foreach ($ch in $Text.ToCharArray()) {
+        $code = [int]$ch
+        if ($code -ge 32 -and $code -le 126) {
+            if ($ch -eq [char]39) { [void]$cur.Append("''") } else { [void]$cur.Append($ch) }
+        } else {
+            [void]$parts.Add("'" + $cur.ToString() + "'")
+            $cur = New-Object System.Text.StringBuilder
+            [void]$parts.Add('[char]' + $code)
+        }
+    }
+    [void]$parts.Add("'" + $cur.ToString() + "'")
+    if ($parts.Count -eq 1) { return [string]$parts[0] }
+    return ('(' + (($parts.ToArray()) -join ' + ') + ')')
+}
+
+# Logica pura: testo (ASCII) dell'avviatore avvio-shell.ps1.
+function Get-ShellLauncherScript {
+    param([ValidateSet('steam', 'playnite')][string]$Mode, [string]$Exe)
+    $exeArgs = ''
+    $procs = "'Playnite.FullscreenApp'"
+    if ($Mode -eq 'steam') { $exeArgs = '-gamepadui'; $procs = "'steam'" }
+    $tpl = @'
+# Avviatore creato da OneXPlayer 1S Utility: shell dell'utente al posto del desktop.
+# Se qualcosa non va torna al desktop. Con -Prova non scrive nel registro, non avvia nulla e non aspetta:
+# stampa solo le decisioni (-ProvaFails e -ProvaExeExists le simulano).
+param([switch]$Prova, [int]$ProvaFails = -1, [int]$ProvaExeExists = -1)
+
+$Mode = @@MODE@@
+$Exe = @@EXE@@
+$ExeArgs = @@ARGS@@
+$ProcNames = @(@@PROCS@@)
+$WinlogonKey = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon'
+$StateKey = 'HKCU:\Software\OXP1S-Utility'
+$Self = $PSCommandPath
+$ShellCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $Self + '"'
+
+function Say([string]$Msg) { if ($Prova) { Write-Output ('[PROVA] ' + $Msg) } }
+
+function Get-ShellDecision {
+    param([int]$Fails, [bool]$ExeExists)
+    if ($Fails -ge 2) { return 'desktop-permanente' }
+    if (-not $ExeExists) { return 'desktop-permanente' }
+    return 'avvia'
+}
+
+function Get-NextFails {
+    param([int]$Fails, [double]$Seconds)
+    if ($Seconds -lt 45) { return ($Fails + 1) }
+    return 0
+}
+
+function Get-StoredFails {
+    try { return [int](Get-ItemProperty -LiteralPath $StateKey -Name 'ShellFastFails' -ErrorAction Stop).ShellFastFails } catch { return 0 }
+}
+
+function Set-StoredFails([int]$Value) {
+    if ($Prova) { Say ('scriverebbe ShellFastFails = ' + $Value); return }
+    if (-not (Test-Path -LiteralPath $StateKey)) { New-Item -Path $StateKey -Force | Out-Null }
+    New-ItemProperty -LiteralPath $StateKey -Name 'ShellFastFails' -PropertyType DWord -Value $Value -Force | Out-Null
+}
+
+function Start-Explorer {
+    if ($Prova) { Say 'avvierebbe explorer.exe'; return }
+    Start-Process -FilePath 'explorer.exe'
+}
+
+# Desktop permanente: toglie la shell dell'utente e le sue tracce, poi avvia Explorer.
+function Switch-ToDesktopPermanent {
+    if ($Prova) { Say 'desktop PERMANENTE: cancellerebbe Shell (HKCU), ShellMode e ShellFastFails, poi avvierebbe explorer.exe'; return }
+    Remove-ItemProperty -LiteralPath $WinlogonKey -Name 'Shell' -ErrorAction SilentlyContinue
+    Remove-ItemProperty -LiteralPath $StateKey -Name 'ShellMode' -ErrorAction SilentlyContinue
+    Remove-ItemProperty -LiteralPath $StateKey -Name 'ShellFastFails' -ErrorAction SilentlyContinue
+    Start-Explorer
+}
+
+# Desktop temporaneo: Explorer avviato mentre la shell registrata e un'altra apre solo una finestra di file,
+# quindi si toglie il valore Shell, si avvia Explorer e dopo 15 secondi si rimette (al prossimo accesso riparte il programma).
+function Switch-ToDesktopTemporary {
+    if ($Prova) { Say ('desktop TEMPORANEO: cancellerebbe Shell (HKCU), avvierebbe explorer.exe, aspetterebbe 15 s e riscriverebbe Shell = ' + $ShellCmd); return }
+    Remove-ItemProperty -LiteralPath $WinlogonKey -Name 'Shell' -ErrorAction SilentlyContinue
+    Start-Explorer
+    Start-Sleep -Seconds 15
+    New-ItemProperty -LiteralPath $WinlogonKey -Name 'Shell' -PropertyType String -Value $ShellCmd -Force | Out-Null
+}
+
+# Explorer gia in esecuzione in questa sessione = l'avviatore e stato rilanciato a sessione avviata
+# (per esempio da Windows dopo la sua uscita): non deve riaprire il programma sopra il desktop.
+function Test-ExplorerRunning {
+    try {
+        $sid = (Get-Process -Id $PID).SessionId
+        return (@(Get-Process -Name 'explorer' -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $sid }).Count -gt 0)
+    } catch { return $false }
+}
+
+if (Test-ExplorerRunning) {
+    if ($Prova) { Say 'Explorer e gia in esecuzione: nell''uso reale l''avviatore uscirebbe subito senza fare nulla (qui prosegue per mostrare le decisioni)' }
+    else { exit 1 }
+}
+
+try {
+    $fails = Get-StoredFails
+    if ($ProvaFails -ge 0) { $fails = $ProvaFails }
+    $exeExists = [bool](Test-Path -LiteralPath $Exe -PathType Leaf)
+    if ($ProvaExeExists -ge 0) { $exeExists = ($ProvaExeExists -eq 1) }
+    $decision = Get-ShellDecision -Fails $fails -ExeExists $exeExists
+    Say ('modalita = ' + $Mode + ', fallimenti rapidi = ' + $fails + ', eseguibile presente = ' + $exeExists + ' -> decisione: ' + $decision)
+
+    if ($decision -eq 'avvia') {
+        if ($Prova) {
+            Say ('avvierebbe: ' + $Exe + ' ' + $ExeArgs)
+            Say ('aspetterebbe 20 s, poi finche esiste un processo tra: ' + ($ProcNames -join ', ') + ' (controllo ogni 2 s, chiuso dopo 3 controlli di fila senza processo)')
+            Say ('se dura 10 s: ShellFastFails ' + $fails + ' -> ' + (Get-NextFails -Fails $fails -Seconds 10))
+            Say ('se dura 600 s: ShellFastFails ' + $fails + ' -> ' + (Get-NextFails -Fails $fails -Seconds 600))
+            Say 'poi passerebbe al desktop temporaneo'
+            Switch-ToDesktopTemporary
+        } else {
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            if ($ExeArgs) { Start-Process -FilePath $Exe -ArgumentList $ExeArgs } else { Start-Process -FilePath $Exe }
+            Start-Sleep -Seconds 20
+            # Chiuso solo dopo 3 controlli di fila senza processo: il programma puo riavviarsi da solo (aggiornamenti).
+            $absent = 0
+            while ($absent -lt 3) {
+                if (@(Get-Process -Name $ProcNames -ErrorAction SilentlyContinue).Count -gt 0) { $absent = 0 } else { $absent++ }
+                Start-Sleep -Seconds 2
+            }
+            $secs = $sw.Elapsed.TotalSeconds
+            Set-StoredFails (Get-NextFails -Fails $fails -Seconds $secs)
+            Switch-ToDesktopTemporary
+        }
+    } else {
+        Switch-ToDesktopPermanent
+    }
+} catch {
+    # Qualunque errore non gestito: desktop permanente, mai lo schermo vuoto.
+    try { Switch-ToDesktopPermanent } catch { try { Start-Process -FilePath 'explorer.exe' } catch {} }
+}
+# Codice di uscita 1: per Windows la shell si e chiusa di proposito, quindi non la rilancia.
+if (-not $Prova) { exit 1 }
+'@
+    $tpl = $tpl.Replace('@@MODE@@', (ConvertTo-AsciiPsLiteral $Mode))
+    $tpl = $tpl.Replace('@@EXE@@', (ConvertTo-AsciiPsLiteral $Exe))
+    $tpl = $tpl.Replace('@@ARGS@@', (ConvertTo-AsciiPsLiteral $exeArgs))
+    $tpl = $tpl.Replace('@@PROCS@@', $procs)
+    return $tpl
+}
+
+# Sola lettura: valore Shell di HKCU ($null se assente) e modalita salvata.
+function Get-BootShellValue {
+    try { return [string](Get-ItemProperty -LiteralPath $BootShellKey -Name 'Shell' -ErrorAction Stop).Shell } catch { return $null }
+}
+function Get-BootShellModeValue {
+    try { return [string](Get-ItemProperty -LiteralPath $BootBackupKey -Name 'ShellMode' -ErrorAction Stop).ShellMode } catch { return $null }
+}
+
+# Il CheckBox "Al posto del desktop" vale solo con Steam o Playnite.
+function Update-BootShellCheck {
+    $ok = ([bool]$Ctrl.RbBootSteam.IsChecked -or [bool]$Ctrl.RbBootPlaynite.IsChecked)
+    $Ctrl.ChkBootShell.IsEnabled = $ok
+    if (-not $ok) { $Ctrl.ChkBootShell.IsChecked = $false }
+}
+
+# Sola lettura: aggiorna i RadioButton, la casella "al posto del desktop" e la riga di stato.
 function Update-BootInfo {
     $cur  = Get-BootCurrentCommand
     $mode = Get-BootModeFromCommand -Command $cur
+    $shellVal  = Get-BootShellValue
+    $shellMode = Get-BootShellModeValue
+    $ss = Get-BootShellState -ShellValue $shellVal -LauncherPath $BootLauncherPath -ShellMode $shellMode
+    $asShell = $false
+    if ($ss -eq 'steam' -or $ss -eq 'playnite') { $mode = $ss; $asShell = $true }
     $Ctrl.RbBootDesktop.IsChecked  = ($mode -eq 'desktop')
     $Ctrl.RbBootSteam.IsChecked    = ($mode -eq 'steam')
     $Ctrl.RbBootPlaynite.IsChecked = ($mode -eq 'playnite')
+    Update-BootShellCheck
+    $Ctrl.ChkBootShell.IsChecked = ($asShell -and $Ctrl.ChkBootShell.IsEnabled)
     $label = switch ($mode) { 'steam' { 'Steam Big Picture' } 'playnite' { 'Playnite a schermo intero' } default { 'desktop normale' } }
+    $where = ''
+    if ($mode -ne 'desktop') { $where = if ($asShell) { ' al posto del desktop' } else { ' sopra il desktop' } }
+    $extra = ''
+    if ($ss -eq 'foreign') {
+        if (Test-ShellValueIsOurs -ShellValue $shellVal -LauncherPath $BootLauncherPath) {
+            $extra = ' Shell dell''utility senza modalita salvata: scegli Desktop normale e applica per ripulire.'
+        } else {
+            $extra = ' Esiste gia una shell utente di altri: non viene toccata.'
+        }
+    }
     $steamTxt = if (Find-SteamExe) { 'trovato' } else { 'non trovato' }
     $playTxt  = if (Find-PlayniteExe) { 'trovato' } else { 'non trovato' }
-    $Ctrl.TxtBootInfo.Text = "Attuale: $label. Steam $steamTxt, Playnite $playTxt."
+    $Ctrl.TxtBootInfo.Text = "Attuale: $label$where. Steam $steamTxt, Playnite $playTxt.$extra"
 }
 
 # Unica funzione che scrive nel registro per l'avvio. Restituisce $true se ha scritto.
 function Set-BootMode {
-    param([ValidateSet('desktop', 'steam', 'playnite')][string]$Mode)
+    param([ValidateSet('desktop', 'steam', 'playnite')][string]$Mode, [switch]$AsShell)
 
+    $wantShell = ([bool]$AsShell -and $Mode -ne 'desktop')
     $steamExe = Find-SteamExe
     $playExe  = Find-PlayniteExe
     $cmd = Get-BootCommand -Mode $Mode -SteamExe $steamExe -PlayniteExe $playExe
     if ($Mode -ne 'desktop' -and -not $cmd) {
         $what = if ($Mode -eq 'steam') { 'Steam' } else { 'Playnite' }
         $msg = "$what non risulta installato: installalo dalla scheda Gioco e riprova."
+        Write-UiLog "Avvio: $msg"
+        $Ctrl.TxtBootInfo.Text = $msg
+        return $false
+    }
+
+    $shellVal  = Get-BootShellValue
+    $shellMode = Get-BootShellModeValue
+    $ours = Test-ShellValueIsOurs -ShellValue $shellVal -LauncherPath $BootLauncherPath
+    $foreignShell = (-not [string]::IsNullOrWhiteSpace($shellVal)) -and (-not $ours)
+    if ($wantShell -and $foreignShell) {
+        $msg = "Esiste gia un valore Shell di altri in HKCU (Winlogon): non lo tocco e non attivo l'avvio al posto del desktop."
         Write-UiLog "Avvio: $msg"
         $Ctrl.TxtBootInfo.Text = $msg
         return $false
@@ -1971,6 +2201,35 @@ function Set-BootMode {
         Write-UiLog "Avvio: ripristinato il valore 'Steam' di Run."
     }
 
+    if ($wantShell) {
+        # Ordine voluto: prima file e stato, per ultimo il valore Shell (se qualcosa fallisce prima, il desktop resta quello normale).
+        $exe = if ($Mode -eq 'steam') { $steamExe } else { $playExe }
+        if (-not (Test-Path -LiteralPath $BootShellDir)) { New-Item -ItemType Directory -Path $BootShellDir -Force | Out-Null }
+        $script = Get-ShellLauncherScript -Mode $Mode -Exe $exe
+        [System.IO.File]::WriteAllText($BootLauncherPath, $script, [System.Text.Encoding]::ASCII)
+        Write-UiLog "Avvio: scritto l'avviatore $BootLauncherPath"
+        if (-not (Test-Path -LiteralPath $BootBackupKey)) { New-Item -Path $BootBackupKey -Force | Out-Null }
+        New-ItemProperty -LiteralPath $BootBackupKey -Name 'ShellMode' -PropertyType String -Value $Mode -Force | Out-Null
+        New-ItemProperty -LiteralPath $BootBackupKey -Name 'ShellFastFails' -PropertyType DWord -Value 0 -Force | Out-Null
+        Remove-ItemProperty -LiteralPath $BootRunKey -Name $BootRunName -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $BootShellKey)) { New-Item -Path $BootShellKey -Force | Out-Null }
+        $shellCmd = Get-ShellLauncherCommand -LauncherPath $BootLauncherPath
+        New-ItemProperty -LiteralPath $BootShellKey -Name 'Shell' -PropertyType String -Value $shellCmd -Force | Out-Null
+        Write-UiLog "Avvio: Shell (HKCU, solo per questo utente) = $shellCmd"
+        return $true
+    }
+
+    # Senza -AsShell: se la shell utente e la nostra la togliamo, se e di altri non la tocchiamo.
+    if ($ours) {
+        Remove-ItemProperty -LiteralPath $BootShellKey -Name 'Shell' -ErrorAction SilentlyContinue
+        Remove-ItemProperty -LiteralPath $BootBackupKey -Name 'ShellMode' -ErrorAction SilentlyContinue
+        Remove-ItemProperty -LiteralPath $BootBackupKey -Name 'ShellFastFails' -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $BootLauncherPath -Force -ErrorAction SilentlyContinue
+        Write-UiLog "Avvio: tolta la shell utente dell'utility (HKCU Winlogon Shell) e l'avviatore: torna Explorer."
+    } elseif ($foreignShell) {
+        Write-UiLog "Avvio: in HKCU (Winlogon) esiste un valore Shell di altri: non lo tocco."
+    }
+
     if ($Mode -eq 'desktop') {
         Remove-ItemProperty -LiteralPath $BootRunKey -Name $BootRunName -ErrorAction SilentlyContinue
         Write-UiLog "Avvio: tolto $BootRunName da Run (desktop normale)."
@@ -1985,9 +2244,35 @@ function Invoke-BootApply {
     $mode = 'desktop'
     if ($Ctrl.RbBootSteam.IsChecked) { $mode = 'steam' }
     elseif ($Ctrl.RbBootPlaynite.IsChecked) { $mode = 'playnite' }
+    $asShell = ($mode -ne 'desktop' -and [bool]$Ctrl.ChkBootShell.IsChecked)
+
+    if ($asShell) {
+        $sv = Get-BootShellValue
+        if (-not [string]::IsNullOrWhiteSpace($sv) -and -not (Test-ShellValueIsOurs -ShellValue $sv -LauncherPath $BootLauncherPath)) {
+            $msg = "Esiste gia un valore Shell di altri in HKCU (Winlogon): non lo tocco e non attivo l'avvio al posto del desktop."
+            Write-UiLog "Avvio: $msg"
+            $Ctrl.TxtBootInfo.Text = $msg
+            return
+        }
+        $txt = "ATTENZIONE: opzione avanzata, NON provata sul dispositivo.`n`n" +
+               "Steam Big Picture (o Playnite) partira AL POSTO del desktop di Windows, solo per questo utente.`n`n" +
+               "- Finche il programma e aperto non partono il desktop, la barra delle applicazioni e i programmi in avvio automatico.`n" +
+               "- Chiudendo del tutto Steam (Esci da Steam, non solo da Big Picture) o Playnite compare il desktop.`n" +
+               "- Se il programma si chiude subito per due volte di seguito, al successivo accesso l'utility torna da sola al desktop normale.`n" +
+               "- Per tornare indietro: riapri questa utility e scegli Desktop normale.`n" +
+               "- In emergenza: Ctrl+Shift+Esc, Esegui nuova attivita, explorer.exe.`n`n" +
+               "Vuoi continuare?"
+        $ans = [System.Windows.MessageBox]::Show($txt, "Avvio al posto del desktop", [System.Windows.MessageBoxButton]::YesNo,
+                   [System.Windows.MessageBoxImage]::Warning, [System.Windows.MessageBoxResult]::No)
+        if ($ans -ne [System.Windows.MessageBoxResult]::Yes) {
+            Write-UiLog "Avvio: avvio al posto del desktop annullato dall'utente."
+            return
+        }
+    }
+
     $done = $false
     try {
-        $r = @(Set-BootMode -Mode $mode)
+        $r = @(Set-BootMode -Mode $mode -AsShell:$asShell)
         $done = ($r.Count -gt 0 -and $r[$r.Count - 1] -eq $true)
     } catch {
         Write-UiLog "Avvio: errore durante la scrittura: $($_.Exception.Message)"
@@ -1999,6 +2284,7 @@ function Invoke-BootApply {
     }
     # Se non e stato scritto nulla, la riga di stato mantiene il messaggio (es. "installalo dalla scheda Gioco").
 }
+
 # --- Ottimizzazioni -------------------------------------------------------
 # Analisi pura: ultime due occorrenze di 0x........ nell'output di powercfg /qh (AC e batteria). Si usa /qh e non /query perche
 # l'impostazione PBUTTONACTION e nascosta su alcuni PC e /query non la mostra.
@@ -2311,6 +2597,9 @@ $Ctrl.MainTabs.Add_SelectionChanged({
 })
 
 $Ctrl.BtnBootApply.Add_Click({ Invoke-BootApply })
+$Ctrl.RbBootDesktop.Add_Checked({ Update-BootShellCheck })
+$Ctrl.RbBootSteam.Add_Checked({ Update-BootShellCheck })
+$Ctrl.RbBootPlaynite.Add_Checked({ Update-BootShellCheck })
 $Ctrl.BtnTweakRecommended.Add_Click({
     foreach ($i in $TweakItems) { $i.IsSelected = [bool]$i.Def.Recommended }
     $Ctrl.GridTweaks.Items.Refresh()
