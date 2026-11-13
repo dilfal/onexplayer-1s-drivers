@@ -1,0 +1,10 @@
+# Archivi driver (ospitati su GitHub Releases)
+drivers/*.zip
+*.zip
+
+# Log e cartelle temporanee
+*.log
+temp/
+tmp/
+.DS_Store
+Thumbs.db
