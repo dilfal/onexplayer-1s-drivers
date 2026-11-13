@@ -520,9 +520,47 @@ $AppDefinitions = @(
     [ordered]@{ Order = 22; Id = 'PCSX2Team.PCSX2'; Source = 'winget'; Name = 'PCSX2'; Category = 'Emulazione'
         Purpose = 'Emulatore di PlayStation 2'; Recommended = $false },
     [ordered]@{ Order = 23; Id = '7zip.7zip'; Source = 'winget'; Name = '7-Zip'; Category = 'Utilita'
-        Purpose = 'Apre e crea archivi ZIP, 7z, RAR e altri'; Recommended = $true }
+        Purpose = 'Apre e crea archivi ZIP, 7z, RAR e altri'; Recommended = $true },
+    [ordered]@{ Order = 24; Id = 'DiskInternals.LinuxReader'; Source = 'winget'; Name = 'DiskInternals Linux Reader'; Category = 'Dischi Linux'
+        Purpose = 'Legge dischi e schede ext2/ext3/ext4 in sola lettura e copia i file su Windows, senza rischio di rovinare il disco'; Recommended = $true },
+    [ordered]@{ Order = 25; Id = 'maharmstone.btrfs'; Source = 'winget'; Name = 'WinBtrfs'; Category = 'Dischi Linux'
+        Purpose = 'Fa comparire in Esplora file i dischi btrfs (il formato predefinito di Bazzite), anche in scrittura: usarlo con prudenza'; Recommended = $false }
 )
 
+# ---------------------------------------------------------------------------
+# 3c. Manifest delle ottimizzazioni (scheda Sistema). Type 'Registry': valori DWord con On/Off
+#     (Off = $null significa "cancella il valore"; DefaultIsOn: se il valore e assente conta come Attiva).
+#     Type 'Custom': gestita da rami espliciti in Get-TweakState / Set-TweakState.
+# ---------------------------------------------------------------------------
+$TweakDefinitions = @(
+    [ordered]@{ Id = 'TouchKbAlways'; Name = 'Tastiera touch sempre disponibile'; Category = 'Touch'; Recommended = $true
+        Purpose = 'Il controller integrato puo risultare come tastiera collegata e impedire alla tastiera a schermo di comparire: la fa apparire al tocco.'
+        Type = 'Registry'; DefaultIsOn = $false
+        Values = @( @{ Path = 'HKCU:\Software\Microsoft\TabletTip\1.7'; Name = 'TouchKeyboardTapInvoke'; Kind = 'DWord'; On = 2; Off = 1 } ) },
+    [ordered]@{ Id = 'ExplorerCheckboxes'; Name = 'Caselle di selezione in Esplora file'; Category = 'Touch'; Recommended = $true
+        Purpose = 'Mostra una casella accanto a ogni file per selezionarlo col tocco. Ha effetto riaprendo Esplora file.'
+        Type = 'Registry'; DefaultIsOn = $false
+        Values = @( @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'AutoCheckSelect'; Kind = 'DWord'; On = 1; Off = 0 } ) },
+    [ordered]@{ Id = 'ExplorerSpacing'; Name = 'Spaziatura larga in Esplora file'; Category = 'Touch'; Recommended = $true
+        Purpose = 'Elementi piu distanziati in Esplora file, piu facili da toccare. Ha effetto riaprendo Esplora file.'
+        Type = 'Registry'; DefaultIsOn = $true
+        Values = @( @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'; Name = 'UseCompactMode'; Kind = 'DWord'; On = 0; Off = 1 } ) },
+    [ordered]@{ Id = 'EdgeSwipeOff'; Name = 'Disattiva i gesti dai bordi dello schermo'; Category = 'Touch'; Recommended = $false
+        Purpose = 'Evita di aprire widget e notifiche per sbaglio mentre si gioca. Serve uscire e rientrare in Windows.'
+        Type = 'Registry'; DefaultIsOn = $false
+        Values = @( @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI'; Name = 'AllowEdgeSwipe'; Kind = 'DWord'; On = 0; Off = $null } ) },
+    [ordered]@{ Id = 'GameMode'; Name = 'Modalita Gioco di Windows'; Category = 'Gioco'; Recommended = $true
+        Purpose = 'Da priorita al gioco in primo piano e limita le attivita in background.'
+        Type = 'Registry'; DefaultIsOn = $true
+        Values = @( @{ Path = 'HKCU:\Software\Microsoft\GameBar'; Name = 'AutoGameModeEnabled'; Kind = 'DWord'; On = 1; Off = 0 } ) },
+    [ordered]@{ Id = 'HibernateButton'; Name = 'Tasto di accensione: ibernazione invece di sospensione'; Category = 'Gioco'; Recommended = $true
+        Purpose = 'Il tasto di accensione iberna invece di sospendere: la sospensione moderna consuma batteria nello zaino.'
+        Type = 'Custom' },
+    [ordered]@{ Id = 'StartupDelay'; Name = 'Avvio dei programmi senza attesa dopo l''accesso'; Category = 'Gioco'; Recommended = $false
+        Purpose = 'Puo ridurre l''attesa prima che parta il programma scelto per l''avvio dopo l''accesso.'
+        Type = 'Registry'; DefaultIsOn = $false
+        Values = @( @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Serialize'; Name = 'StartupDelayInMSec'; Kind = 'DWord'; On = 0; Off = $null } ) }
+)
 # ---------------------------------------------------------------------------
 # 4. Rilevamento stato driver sul sistema Windows 11
 # ---------------------------------------------------------------------------
@@ -700,9 +738,21 @@ foreach ($a in $AppDefinitions) {
     })
 }
 
-# Pre-seleziona di default quelli mancanti/aggiornabili se almeno uno manca, altrimenti tutti deselezionati?
-# L'utente ha chiesto la possibilita di installarli tutti uno dopo l'altro: lasciamo selezionati i mancanti o tutti.
-# Se tutti risultano mancanti (fresh install) sono gia tutti selezionati.
+$TweakItems = New-Object 'System.Collections.ObjectModel.ObservableCollection[object]'
+foreach ($tw in $TweakDefinitions) {
+    $TweakItems.Add([PSCustomObject]@{
+        IsSelected   = [bool]$tw.Recommended
+        Id           = $tw.Id
+        Name         = $tw.Name
+        Category     = $tw.Category
+        Purpose      = $tw.Purpose
+        SystemStatus = 'Analisi...'
+        Def          = $tw
+    })
+}
+
+# Selezione iniziale: solo i driver mancanti, in errore o piu vecchi (NeedsInstall); "Seleziona Tutti" li include tutti.
+foreach ($di in $DriverItems) { $di.IsSelected = [bool]$di.NeedsInstall }
 
 # ---------------------------------------------------------------------------
 # 6. Definizione Interfaccia WPF (XAML stile Chris Titus WinUtil)
@@ -871,6 +921,14 @@ foreach ($a in $AppDefinitions) {
             <Setter Property="Margin" Value="0"/>
         </Style>
 
+        <DataTemplate x:Key="SelCheckTemplate">
+            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource CellCheck}"
+                      RenderTransformOrigin="0.5,0.5">
+                <CheckBox.RenderTransform>
+                    <ScaleTransform ScaleX="1.3" ScaleY="1.3"/>
+                </CheckBox.RenderTransform>
+            </CheckBox>
+        </DataTemplate>
         <Style x:Key="DarkGrid" TargetType="DataGrid">
             <Setter Property="AutoGenerateColumns" Value="False"/>
             <Setter Property="CanUserAddRows" Value="False"/>
@@ -886,7 +944,7 @@ foreach ($a in $AppDefinitions) {
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="SelectionMode" Value="Single"/>
             <Setter Property="FontSize" Value="12.5"/>
-            <Setter Property="MinRowHeight" Value="30"/>
+            <Setter Property="MinRowHeight" Value="34"/>
             <Setter Property="ColumnHeaderStyle" Value="{StaticResource GridHeaderStyle}"/>
             <Setter Property="CellStyle" Value="{StaticResource GridCellStyle}"/>
         </Style>
@@ -974,9 +1032,39 @@ foreach ($a in $AppDefinitions) {
                 </Trigger>
             </Style.Triggers>
         </Style>
+
+        <!-- RadioButton scuro -->
+        <Style TargetType="RadioButton">
+            <Setter Property="Foreground" Value="#F8FAFC"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <StackPanel Orientation="Horizontal" Background="Transparent">
+                            <Grid Width="18" Height="18" VerticalAlignment="Center">
+                                <Ellipse Stroke="#94A3B8" StrokeThickness="1.5" Fill="#0F172A"/>
+                                <Ellipse x:Name="Dot" Width="8" Height="8" Fill="#38BDF8" Visibility="Collapsed"/>
+                            </Grid>
+                            <ContentPresenter Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Dot" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
-    <Grid Margin="16">
+    <ScrollViewer x:Name="RootScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+    <Grid x:Name="RootGrid" Margin="16" Width="1000" Height="640">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -987,7 +1075,7 @@ foreach ($a in $AppDefinitions) {
         </Grid.RowDefinitions>
 
         <!-- HEADER -->
-        <Border Grid.Row="0" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="16,12" Margin="0,0,0,10">
+        <Border Grid.Row="0" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="16,12" Margin="0,0,0,10" x:Name="HeaderBorder">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -1041,10 +1129,9 @@ foreach ($a in $AppDefinitions) {
 
                     <!-- LISTA DRIVER -->
                     <Border Grid.Row="1" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="4">
-                        <DataGrid x:Name="GridDrivers" Style="{StaticResource DarkGrid}" RowHeight="30">
+                        <DataGrid x:Name="GridDrivers" Style="{StaticResource DarkGrid}" RowHeight="34">
                             <DataGrid.Columns>
-                                <DataGridCheckBoxColumn Header="Sel." Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="46"
-                                                        ElementStyle="{StaticResource CellCheck}" EditingElementStyle="{StaticResource CellCheck}"/>
+                                <DataGridTemplateColumn Header="Sel." Width="46" CellTemplate="{StaticResource SelCheckTemplate}"/>
                                 <DataGridTextColumn Header="#" Binding="{Binding Order}" IsReadOnly="True" Width="32" ElementStyle="{StaticResource CellText}"/>
                                 <DataGridTextColumn Header="Driver" Binding="{Binding Name}" IsReadOnly="True" Width="290" ElementStyle="{StaticResource CellText}"/>
                                 <DataGridTextColumn Header="Categoria" Binding="{Binding Category}" IsReadOnly="True" Width="105" ElementStyle="{StaticResource CellText}"/>
@@ -1080,8 +1167,7 @@ foreach ($a in $AppDefinitions) {
                     <Border Grid.Row="1" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="4">
                         <DataGrid x:Name="GridApps" Style="{StaticResource DarkGrid}">
                             <DataGrid.Columns>
-                                <DataGridCheckBoxColumn Header="Sel." Binding="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}" Width="46"
-                                                        ElementStyle="{StaticResource CellCheck}" EditingElementStyle="{StaticResource CellCheck}"/>
+                                <DataGridTemplateColumn Header="Sel." Width="46" CellTemplate="{StaticResource SelCheckTemplate}"/>
                                 <DataGridTextColumn Header="Programma" Binding="{Binding Name}" IsReadOnly="True" Width="215" ElementStyle="{StaticResource CellTextWrap}"/>
                                 <DataGridTextColumn Header="Categoria" Binding="{Binding Category}" IsReadOnly="True" Width="95" ElementStyle="{StaticResource CellText}"/>
                                 <DataGridTextColumn Header="A cosa serve" Binding="{Binding Purpose}" IsReadOnly="True" Width="*" ElementStyle="{StaticResource CellTextWrap}"/>
@@ -1169,10 +1255,91 @@ foreach ($a in $AppDefinitions) {
                     </Grid>
                 </ScrollViewer>
             </TabItem>
+
+            <!-- ===================== SCHEDA SISTEMA ===================== -->
+            <TabItem Header="Sistema">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="420"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,8,0">
+                        <StackPanel Margin="0,0,2,0">
+                            <Border Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="12,6" Margin="0,0,0,6">
+                                <StackPanel>
+                                    <TextBlock Text="Avvio del dispositivo" Style="{StaticResource CardTitle}" Margin="0,0,0,3"/>
+                                    <TextBlock Style="{StaticResource CardHint}" FontSize="11" Margin="0,0,0,5"
+                                               Text="Parte all'accesso sopra il desktop normale: Explorer resta la shell, quindi uscendo si torna al desktop."/>
+                                    <WrapPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="RbBootDesktop" Content="Desktop normale" GroupName="BootMode" IsChecked="True" FontSize="12" Margin="0,0,12,4"/>
+                                        <RadioButton x:Name="RbBootSteam" Content="Steam Big Picture" GroupName="BootMode" FontSize="12" Margin="0,0,12,4"/>
+                                        <RadioButton x:Name="RbBootPlaynite" Content="Playnite a schermo intero" GroupName="BootMode" FontSize="12" Margin="0,0,0,4"/>
+                                    </WrapPanel>
+                                    <Grid Margin="0,2,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="TxtBootInfo" Grid.Column="0" Text="Lettura in corso..." FontSize="11" Foreground="#CBD5E1"
+                                                   TextWrapping="Wrap" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <Button x:Name="BtnBootApply" Grid.Column="1" Content="Applica avvio" Style="{StaticResource ToolbarBtn}" Padding="10,4" Margin="0"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="12,6">
+                                <StackPanel>
+                                    <TextBlock Text="Impostazioni di Windows" Style="{StaticResource CardTitle}" Margin="0,0,0,2"/>
+                                    <TextBlock Style="{StaticResource CardHint}" FontSize="11" Margin="0,0,0,5"
+                                               Text="Sul 1S conviene una scala dello schermo del 200-250%."/>
+                                    <WrapPanel Orientation="Horizontal">
+                                        <Button x:Name="BtnOpenScale" Content="Scala dello schermo" Style="{StaticResource ToolbarBtn}" Padding="8,4" FontSize="11.5" Margin="0,0,6,5"/>
+                                        <Button x:Name="BtnOpenTyping" Content="Tastiera touch" Style="{StaticResource ToolbarBtn}" Padding="8,4" FontSize="11.5" Margin="0,0,6,5"/>
+                                        <Button x:Name="BtnOpenTouch" Content="Gesti touch" Style="{StaticResource ToolbarBtn}" Padding="8,4" FontSize="11.5" Margin="0,0,6,5"/>
+                                        <Button x:Name="BtnOpenSignin" Content="Accesso con impronta o PIN" Style="{StaticResource ToolbarBtn}" Padding="8,4" FontSize="11.5" Margin="0,0,6,5"/>
+                                        <Button x:Name="BtnOpenGaming" Content="Modalita Gioco" Style="{StaticResource ToolbarBtn}" Padding="8,4" FontSize="11.5" Margin="0,0,6,5"/>
+                                        <Button x:Name="BtnOpenWinUtil" Content="Apri WinUtil (pulizia di Windows)" Style="{StaticResource ToolbarBtn}" Padding="8,4" FontSize="11.5" Margin="0,0,6,5"/>
+                                    </WrapPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <Grid Grid.Column="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <Border Grid.Row="0" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="10,8,10,2" Margin="0,0,0,8">
+                            <WrapPanel Orientation="Horizontal">
+                                <Button x:Name="BtnTweakRecommended" Content="Consigliate" Style="{StaticResource ToolbarBtn}" Margin="0,0,6,6" Padding="10,6"/>
+                                <Button x:Name="BtnTweakAll" Content="Tutte" Style="{StaticResource ToolbarBtn}" Margin="0,0,6,6" Padding="10,6"/>
+                                <Button x:Name="BtnTweakNone" Content="Nessuna" Style="{StaticResource ToolbarBtn}" Margin="0,0,6,6" Padding="10,6"/>
+                                <Button x:Name="BtnTweakRefresh" Content="Aggiorna stato" Style="{StaticResource ToolbarBtn}" Margin="0,0,6,6" Padding="10,6"/>
+                                <Button x:Name="BtnTweakUndo" Content="Ripristina selezionate" Style="{StaticResource ToolbarBtn}" Margin="0,0,0,6" Padding="10,6"/>
+                            </WrapPanel>
+                        </Border>
+
+                        <Border Grid.Row="1" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="4">
+                            <DataGrid x:Name="GridTweaks" Style="{StaticResource DarkGrid}" FontSize="12">
+                                <DataGrid.Columns>
+                                    <DataGridTemplateColumn Header="Sel." Width="42" CellTemplate="{StaticResource SelCheckTemplate}"/>
+                                    <DataGridTextColumn Header="Regolazione" Binding="{Binding Name}" IsReadOnly="True" Width="165" ElementStyle="{StaticResource CellTextWrap}"/>
+                                    <DataGridTextColumn Header="Categoria" Binding="{Binding Category}" IsReadOnly="True" Width="68" ElementStyle="{StaticResource CellText}"/>
+                                    <DataGridTextColumn Header="Cosa fa" Binding="{Binding Purpose}" IsReadOnly="True" Width="*" ElementStyle="{StaticResource CellTextWrap}"/>
+                                    <DataGridTextColumn Header="Stato attuale" Binding="{Binding SystemStatus}" IsReadOnly="True" Width="96" ElementStyle="{StaticResource CellText}"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </TabItem>
         </TabControl>
 
         <!-- BARRA DI AVANZAMENTO -->
-        <Border Grid.Row="3" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,10">
+        <Border x:Name="ProgressBorder" Grid.Row="3" Background="#1E293B" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="12,10" Margin="0,0,0,10">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -1193,7 +1360,7 @@ foreach ($a in $AppDefinitions) {
         </Border>
 
         <!-- LOG IN TEMPO REALE -->
-        <Border Grid.Row="4" Background="#090D16" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="8" Margin="0,0,0,10">
+        <Border x:Name="LogBorder" Grid.Row="4" Background="#090D16" BorderBrush="#334155" BorderThickness="1" CornerRadius="8" Padding="8" Margin="0,0,0,10">
             <TextBox x:Name="TxtLog" IsReadOnly="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                      Background="Transparent" Foreground="#CBD5E1" BorderThickness="0"
                      FontFamily="Consolas" FontSize="11.5" TextWrapping="NoWrap"/>
@@ -1205,7 +1372,7 @@ foreach ($a in $AppDefinitions) {
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBlock x:Name="TxtFooterInfo" Grid.Column="0" VerticalAlignment="Center" FontSize="11.5" Foreground="#64748B"
+            <TextBlock x:Name="TxtFooterInfo" Grid.Column="0" VerticalAlignment="Center" FontSize="11.5" Foreground="#64748B" TextTrimming="CharacterEllipsis" Margin="0,0,10,0"
                        Text="Nota: Intel PCH Chipset Init Kit (.bin OEM) escluso perche non installabile da Windows."/>
             <StackPanel Grid.Column="1" Orientation="Horizontal">
                 <Button x:Name="BtnCancel" Content="Annulla" Style="{StaticResource DangerBtn}" IsEnabled="False"/>
@@ -1213,6 +1380,7 @@ foreach ($a in $AppDefinitions) {
             </StackPanel>
         </Grid>
     </Grid>
+    </ScrollViewer>
 </Window>
 "@
 
@@ -1228,11 +1396,15 @@ $Ctrl = @{}
     'TxtLog', 'TxtFooterInfo', 'BtnCancel', 'BtnInstall',
     'MainTabs', 'GridApps', 'BtnAppRecommended', 'BtnAppAll', 'BtnAppNone', 'BtnAppRefresh',
     'TxtDisplayInfo', 'BtnRotate90', 'BtnRotate180', 'BtnRotate270', 'TxtRotationLock', 'BtnRotationLock',
-    'BtnResNative', 'BtnRes1920', 'BtnRes1280', 'TxtTouchInfo', 'BtnTouchDiag', 'BtnTouchRepair'
+    'BtnResNative', 'BtnRes1920', 'BtnRes1280', 'TxtTouchInfo', 'BtnTouchDiag', 'BtnTouchRepair',
+    'RbBootDesktop', 'RbBootSteam', 'RbBootPlaynite', 'TxtBootInfo', 'BtnBootApply',
+    'BtnTweakRecommended', 'BtnTweakAll', 'BtnTweakNone', 'BtnTweakRefresh', 'BtnTweakUndo', 'GridTweaks',
+    'RootScroll', 'RootGrid', 'HeaderBorder', 'ProgressBorder', 'LogBorder', 'BtnOpenScale', 'BtnOpenTyping', 'BtnOpenSignin', 'BtnOpenTouch', 'BtnOpenGaming', 'BtnOpenWinUtil'
 ) | ForEach-Object { $Ctrl[$_] = $Window.FindName($_) }
 
 $Ctrl.GridDrivers.ItemsSource = $DriverItems
 $Ctrl.GridApps.ItemsSource = $AppItems
+$Ctrl.GridTweaks.ItemsSource = $TweakItems
 
 $osInfo = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
 $osLabel = if ($osInfo) { "$($osInfo.Caption) ($($osInfo.BuildNumber))" } else { "Windows 11" }
@@ -1252,6 +1424,7 @@ $Sync = [hashtable]::Synchronized(@{
     AppsDetected    = $false
     AppDetectRunning = $false
     DisplayShown    = $false
+    TweaksShown     = $false
     LogQueue       = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
     ProgressTitle   = "Pronto per l'installazione."
     ProgressCount   = "0 / 0"
@@ -1286,7 +1459,8 @@ $FooterScreen  = "Ogni modifica dello schermo chiede conferma entro 15 secondi, 
 function Set-PresetButtons {
     param([bool]$Enabled)
     foreach ($n in @('BtnSelectAll', 'BtnSelectMissing', 'BtnSelectEssential', 'BtnSelectNone', 'BtnRefresh',
-                     'BtnAppRecommended', 'BtnAppAll', 'BtnAppNone', 'BtnAppRefresh')) {
+                     'BtnAppRecommended', 'BtnAppAll', 'BtnAppNone', 'BtnAppRefresh',
+                     'BtnTweakRecommended', 'BtnTweakAll', 'BtnTweakNone', 'BtnTweakRefresh', 'BtnTweakUndo')) {
         $Ctrl[$n].IsEnabled = $Enabled
     }
 }
@@ -1297,6 +1471,8 @@ function Update-InstallButton {
     switch ($Ctrl.MainTabs.SelectedIndex) {
         0 { $Ctrl.BtnInstall.Content = "Installa Driver Selezionati"; $Ctrl.BtnInstall.IsEnabled = (-not $running); $Ctrl.TxtFooterInfo.Text = $FooterDrivers }
         1 { $Ctrl.BtnInstall.Content = "Installa Programmi Selezionati"; $Ctrl.BtnInstall.IsEnabled = (-not $running); $Ctrl.TxtFooterInfo.Text = $FooterApps }
+        2 { $Ctrl.BtnInstall.Content = "Installa"; $Ctrl.BtnInstall.IsEnabled = $false; $Ctrl.TxtFooterInfo.Text = $FooterScreen }
+        3 { $Ctrl.BtnInstall.Content = "Applica Ottimizzazioni Selezionate"; $Ctrl.BtnInstall.IsEnabled = (-not $running); $Ctrl.TxtFooterInfo.Text = $FooterSystem }
         default { $Ctrl.BtnInstall.Content = "Installa"; $Ctrl.BtnInstall.IsEnabled = $false; $Ctrl.TxtFooterInfo.Text = $FooterScreen }
     }
 }
@@ -1665,6 +1841,383 @@ function Repair-Touch {
 }
 
 # ---------------------------------------------------------------------------
+# 7c. Scheda Sistema: avvio del dispositivo, ottimizzazioni, collegamenti alle Impostazioni
+# ---------------------------------------------------------------------------
+$FooterSystem = "Le ottimizzazioni sono reversibili con Ripristina selezionate; alcune hanno effetto dopo aver riaperto Esplora file o dopo un nuovo accesso."
+
+# --- Avvio del dispositivo -------------------------------------------------
+# Avvio automatico ALL'ACCESSO, SOPRA il desktop normale: si scrive solo un valore nella chiave Run dell'utente.
+# Explorer resta la shell di Windows, quindi uscendo da Big Picture o da Playnite si torna al desktop.
+# Non si usa Shell Launcher e non si tocca Winlogon: niente sostituzione della shell.
+$BootRunKey     = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$BootRunName    = 'OXP1S-AvvioGioco'
+$BootBackupKey  = 'HKCU:\Software\OXP1S-Utility'
+$BootBackupName = 'SteamRunBackup'
+
+# Logica pura: costruisce il comando da scrivere nella chiave Run ($null per desktop o se manca il percorso).
+function Get-BootCommand {
+    param([string]$Mode, [string]$SteamExe, [string]$PlayniteExe)
+    if ($Mode -eq 'steam') {
+        if ($SteamExe) { return ('"' + $SteamExe + '" -gamepadui') }
+        return $null
+    }
+    if ($Mode -eq 'playnite') {
+        if ($PlayniteExe) { return ('"' + $PlayniteExe + '"') }
+        return $null
+    }
+    return $null
+}
+
+# Logica pura: deduce la modalita dal comando salvato in Run (stringa vuota o estranea = desktop).
+function Get-BootModeFromCommand {
+    param([string]$Command)
+    if ([string]::IsNullOrWhiteSpace($Command)) { return 'desktop' }
+    if ($Command -match '(?i)steam\.exe"?\s+.*-gamepadui') { return 'steam' }
+    if ($Command -match '(?i)Playnite\.FullscreenApp\.exe') { return 'playnite' }
+    return 'desktop'
+}
+
+# Sola lettura: percorso di steam.exe (registro dell'utente, poi installazione a 32 bit di sistema).
+function Find-SteamExe {
+    $cands = @()
+    try {
+        $v = (Get-ItemProperty -LiteralPath 'HKCU:\Software\Valve\Steam' -Name 'SteamExe' -ErrorAction Stop).SteamExe
+        if ($v) { $cands += ([string]$v).Replace('/', '\') }
+    } catch {}
+    try {
+        $ip = (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam' -Name 'InstallPath' -ErrorAction Stop).InstallPath
+        if ($ip) { $cands += (([string]$ip).Replace('/', '\').TrimEnd('\') + '\steam.exe') }
+    } catch {}
+    foreach ($c in $cands) {
+        if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+    }
+    return $null
+}
+
+# Sola lettura: percorso di Playnite.FullscreenApp.exe (cartella dell'utente, poi voci di disinstallazione).
+function Find-PlayniteExe {
+    $exeName = 'Playnite.FullscreenApp.exe'
+    $cands = @()
+    if ($env:LOCALAPPDATA) { $cands += (Join-Path (Join-Path $env:LOCALAPPDATA 'Playnite') $exeName) }
+    $regPaths = @(
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    foreach ($rp in $regPaths) {
+        try {
+            foreach ($e in @(Get-ItemProperty -Path $rp -ErrorAction SilentlyContinue)) {
+                if ($e.DisplayName -and ([string]$e.DisplayName) -like 'Playnite*' -and $e.InstallLocation) {
+                    $cands += (Join-Path ([string]$e.InstallLocation) $exeName)
+                }
+            }
+        } catch {}
+    }
+    foreach ($c in $cands) {
+        if (Test-Path -LiteralPath $c -PathType Leaf) { return $c }
+    }
+    return $null
+}
+
+# Sola lettura: valore corrente di OXP1S-AvvioGioco ($null se assente).
+function Get-BootCurrentCommand {
+    try { return [string](Get-ItemProperty -LiteralPath $BootRunKey -Name $BootRunName -ErrorAction Stop).$BootRunName } catch { return $null }
+}
+
+# Sola lettura: aggiorna i RadioButton e la riga di stato.
+function Update-BootInfo {
+    $cur  = Get-BootCurrentCommand
+    $mode = Get-BootModeFromCommand -Command $cur
+    $Ctrl.RbBootDesktop.IsChecked  = ($mode -eq 'desktop')
+    $Ctrl.RbBootSteam.IsChecked    = ($mode -eq 'steam')
+    $Ctrl.RbBootPlaynite.IsChecked = ($mode -eq 'playnite')
+    $label = switch ($mode) { 'steam' { 'Steam Big Picture' } 'playnite' { 'Playnite a schermo intero' } default { 'desktop normale' } }
+    $steamTxt = if (Find-SteamExe) { 'trovato' } else { 'non trovato' }
+    $playTxt  = if (Find-PlayniteExe) { 'trovato' } else { 'non trovato' }
+    $Ctrl.TxtBootInfo.Text = "Attuale: $label. Steam $steamTxt, Playnite $playTxt."
+}
+
+# Unica funzione che scrive nel registro per l'avvio. Restituisce $true se ha scritto.
+function Set-BootMode {
+    param([ValidateSet('desktop', 'steam', 'playnite')][string]$Mode)
+
+    $steamExe = Find-SteamExe
+    $playExe  = Find-PlayniteExe
+    $cmd = Get-BootCommand -Mode $Mode -SteamExe $steamExe -PlayniteExe $playExe
+    if ($Mode -ne 'desktop' -and -not $cmd) {
+        $what = if ($Mode -eq 'steam') { 'Steam' } else { 'Playnite' }
+        $msg = "$what non risulta installato: installalo dalla scheda Gioco e riprova."
+        Write-UiLog "Avvio: $msg"
+        $Ctrl.TxtBootInfo.Text = $msg
+        return $false
+    }
+
+    # Il valore 'Steam' (avvio silenzioso) di Steam si ostacola con l'avvio scelto: lo mettiamo da parte.
+    $steamRun = $null
+    try { $steamRun = [string](Get-ItemProperty -LiteralPath $BootRunKey -Name 'Steam' -ErrorAction Stop).Steam } catch {}
+    $backup = $null
+    try { $backup = [string](Get-ItemProperty -LiteralPath $BootBackupKey -Name $BootBackupName -ErrorAction Stop).$BootBackupName } catch {}
+
+    if ($Mode -eq 'steam') {
+        if ($null -ne $steamRun) {
+            if (-not (Test-Path -LiteralPath $BootBackupKey)) { New-Item -Path $BootBackupKey -Force | Out-Null }
+            New-ItemProperty -LiteralPath $BootBackupKey -Name $BootBackupName -PropertyType String -Value $steamRun -Force | Out-Null
+            Remove-ItemProperty -LiteralPath $BootRunKey -Name 'Steam' -ErrorAction SilentlyContinue
+            Write-UiLog "Avvio: valore 'Steam' di Run salvato in $BootBackupKey e tolto da Run."
+        }
+    } elseif ($null -ne $backup) {
+        New-ItemProperty -LiteralPath $BootRunKey -Name 'Steam' -PropertyType String -Value $backup -Force | Out-Null
+        Remove-ItemProperty -LiteralPath $BootBackupKey -Name $BootBackupName -ErrorAction SilentlyContinue
+        Write-UiLog "Avvio: ripristinato il valore 'Steam' di Run."
+    }
+
+    if ($Mode -eq 'desktop') {
+        Remove-ItemProperty -LiteralPath $BootRunKey -Name $BootRunName -ErrorAction SilentlyContinue
+        Write-UiLog "Avvio: tolto $BootRunName da Run (desktop normale)."
+    } else {
+        New-ItemProperty -LiteralPath $BootRunKey -Name $BootRunName -PropertyType String -Value $cmd -Force | Out-Null
+        Write-UiLog "Avvio: $BootRunName = $cmd"
+    }
+    return $true
+}
+
+function Invoke-BootApply {
+    $mode = 'desktop'
+    if ($Ctrl.RbBootSteam.IsChecked) { $mode = 'steam' }
+    elseif ($Ctrl.RbBootPlaynite.IsChecked) { $mode = 'playnite' }
+    $done = $false
+    try {
+        $r = @(Set-BootMode -Mode $mode)
+        $done = ($r.Count -gt 0 -and $r[$r.Count - 1] -eq $true)
+    } catch {
+        Write-UiLog "Avvio: errore durante la scrittura: $($_.Exception.Message)"
+        $Ctrl.TxtBootInfo.Text = "Errore durante la scrittura: $($_.Exception.Message)"
+    }
+    if ($done) {
+        Write-UiLog "Avvio: impostazione applicata, vale dal prossimo accesso."
+        Update-BootInfo
+    }
+    # Se non e stato scritto nulla, la riga di stato mantiene il messaggio (es. "installalo dalla scheda Gioco").
+}
+# --- Ottimizzazioni -------------------------------------------------------
+# Analisi pura: ultime due occorrenze di 0x........ nell'output di powercfg /qh (AC e batteria). Si usa /qh e non /query perche
+# l'impostazione PBUTTONACTION e nascosta su alcuni PC e /query non la mostra.
+# L'output e tradotto nella lingua del sistema, quindi non si cercano le etichette.
+function Get-PowerButtonIndexes {
+    param([string]$Text)
+    $m = @([regex]::Matches([string]$Text, '0x[0-9a-fA-F]{8}'))
+    if ($m.Count -lt 2) { return $null }
+    $ac = [Convert]::ToInt32($m[$m.Count - 2].Value.Substring(2), 16)
+    $dc = [Convert]::ToInt32($m[$m.Count - 1].Value.Substring(2), 16)
+    return @($ac, $dc)
+}
+
+function Invoke-PowerCfg {
+    param([string[]]$ArgList)
+    $out = ""
+    try { $out = (& powercfg.exe @ArgList 2>&1 | Out-String) } catch { $out = $_.Exception.Message }
+    return [PSCustomObject]@{ ExitCode = $LASTEXITCODE; Output = $out }
+}
+
+function Get-TweakState {
+    param($Def)
+    try {
+        if ($Def.Type -eq 'Custom') {
+            if ($Def.Id -eq 'HibernateButton') {
+                $r = Invoke-PowerCfg -ArgList @('/qh', 'SCHEME_CURRENT', 'SUB_BUTTONS', 'PBUTTONACTION')
+                $idx = Get-PowerButtonIndexes -Text $r.Output
+                if ($null -eq $idx) { return 'Non determinato' }
+                if ($idx[0] -eq 2 -and $idx[1] -eq 2) { return 'Attiva' }
+                return 'Non attiva'
+            }
+            return 'Non determinato'
+        }
+        foreach ($v in @($Def.Values)) {
+            $exists = $false
+            $cur = $null
+            try {
+                $cur = (Get-ItemProperty -LiteralPath $v.Path -Name $v.Name -ErrorAction Stop).($v.Name)
+                $exists = $true
+            } catch {}
+            $isOn = $false
+            if ($exists) { $isOn = ([int]$cur -eq [int]$v.On) } else { $isOn = [bool]$Def.DefaultIsOn }
+            if (-not $isOn) { return 'Non attiva' }
+        }
+        return 'Attiva'
+    } catch {
+        return 'Non determinato'
+    }
+}
+
+# Applica ($On = $true) o ripristina ($On = $false) una voce. Registra ogni scrittura nel log.
+function Set-TweakState {
+    param($Def, [bool]$On)
+    if ($Def.Type -eq 'Custom') {
+        if ($Def.Id -eq 'HibernateButton') {
+            $idxValue = if ($On) { '2' } else { '1' }
+            if ($On) {
+                $r = Invoke-PowerCfg -ArgList @('/hibernate', 'on')
+                Write-UiLog "  powercfg /hibernate on -> codice $($r.ExitCode)"
+            }
+            $r = Invoke-PowerCfg -ArgList @('/setacvalueindex', 'SCHEME_CURRENT', 'SUB_BUTTONS', 'PBUTTONACTION', $idxValue)
+            Write-UiLog "  powercfg /setacvalueindex ... PBUTTONACTION $idxValue -> codice $($r.ExitCode)"
+            $r = Invoke-PowerCfg -ArgList @('/setdcvalueindex', 'SCHEME_CURRENT', 'SUB_BUTTONS', 'PBUTTONACTION', $idxValue)
+            Write-UiLog "  powercfg /setdcvalueindex ... PBUTTONACTION $idxValue -> codice $($r.ExitCode)"
+            $r = Invoke-PowerCfg -ArgList @('/setactive', 'SCHEME_CURRENT')
+            Write-UiLog "  powercfg /setactive SCHEME_CURRENT -> codice $($r.ExitCode)"
+        }
+        return
+    }
+    foreach ($v in @($Def.Values)) {
+        $target = if ($On) { $v.On } else { $v.Off }
+        if ($null -eq $target) {
+            $has = $false
+            try { [void](Get-ItemProperty -LiteralPath $v.Path -Name $v.Name -ErrorAction Stop); $has = $true } catch {}
+            if ($has) {
+                Remove-ItemProperty -LiteralPath $v.Path -Name $v.Name -ErrorAction Stop
+                Write-UiLog "  Cancellato $($v.Path)\$($v.Name)"
+            } else {
+                Write-UiLog "  Gia assente $($v.Path)\$($v.Name)"
+            }
+        } else {
+            if (-not (Test-Path -LiteralPath $v.Path)) { New-Item -Path $v.Path -Force | Out-Null }
+            New-ItemProperty -LiteralPath $v.Path -Name $v.Name -PropertyType DWord -Value ([int]$target) -Force | Out-Null
+            Write-UiLog "  Scritto $($v.Path)\$($v.Name) = $target"
+        }
+    }
+}
+
+function Update-TweakStates {
+    foreach ($t in $TweakItems) { $t.SystemStatus = Get-TweakState -Def $t.Def }
+    try { $Ctrl.GridTweaks.Items.Refresh() } catch {}
+}
+
+function Invoke-Tweaks {
+    param([bool]$On)
+    if ($Sync.IsRunning) { Write-UiLog "Ottimizzazioni: attendi la fine della coda di installazione."; return }
+    $selected = @($TweakItems | Where-Object { $_.IsSelected })
+    if ($selected.Count -eq 0) {
+        [System.Windows.MessageBox]::Show("Seleziona almeno una ottimizzazione.", "Nessuna selezione", "OK", "Warning") | Out-Null
+        return
+    }
+    $verb = if ($On) { "Applico" } else { "Ripristino" }
+    foreach ($t in $selected) {
+        Write-UiLog "${verb}: $($t.Name)"
+        try { Set-TweakState -Def $t.Def -On $On } catch { Write-UiLog "  Errore su $($t.Name): $($_.Exception.Message)" }
+    }
+    Update-TweakStates
+    foreach ($t in $selected) { Write-UiLog "  Stato di $($t.Name): $($t.SystemStatus)" }
+    Write-UiLog "Ottimizzazioni terminate. Alcune hanno effetto riaprendo Esplora file o dopo un nuovo accesso."
+}
+
+function Open-SettingsPage {
+    param([string]$Uri)
+    try { Start-Process $Uri } catch { Write-UiLog "Impossibile aprire $Uri : $($_.Exception.Message)" }
+}
+
+function Open-WinUtil {
+    $res = [System.Windows.MessageBox]::Show(
+        "Verra scaricato ed eseguito lo strumento di Chris Titus (WinUtil) da christitus.com/win, in una nuova finestra di PowerShell.`n`nCon WinUtil si possono cambiare molte impostazioni di Windows: leggi bene prima di applicare qualcosa.`n`nVuoi continuare?",
+        "Apri WinUtil", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Question)
+    if ($res -ne [System.Windows.MessageBoxResult]::Yes) { return }
+    try {
+        Start-Process -FilePath "powershell.exe" -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command "irm https://christitus.com/win | iex"'
+        Write-UiLog "WinUtil avviato in una nuova finestra."
+    } catch { Write-UiLog "Impossibile avviare WinUtil: $($_.Exception.Message)" }
+}
+
+# ---------------------------------------------------------------------------
+# 7d. Finestra adattiva: sul 1S l'area di lavoro puo essere 1280x752, 1024x592 o anche in verticale
+#     (800x1232, 640x976) prima di installare il driver grafico. Se e piu piccola della finestra
+#     la finestra parte ingrandita; il contenuto sta in uno ScrollViewer con misure minime.
+# ---------------------------------------------------------------------------
+$FitNormalWidth      = 1080.0
+$FitNormalHeight     = 780.0
+$FitMinContentWidth  = 860.0
+$FitMinContentHeight = 520.0
+
+# Dimensiona la griglia principale: almeno 860x560, altrimenti compaiono le barre di scorrimento.
+function Update-RootSize {
+    $sv = $Ctrl.RootScroll
+    $g  = $Ctrl.RootGrid
+    # Un pixel in meno: con l'arrotondamento del layout una griglia grande come l'area farebbe comparire le barre.
+    $w = [Math]::Floor([double]$sv.ActualWidth) - 1.0
+    $h = [Math]::Floor([double]$sv.ActualHeight) - 1.0
+    if ($w -le 0 -or $h -le 0) { return }
+    $barW = [double][System.Windows.SystemParameters]::VerticalScrollBarWidth
+    $barH = [double][System.Windows.SystemParameters]::HorizontalScrollBarHeight
+    $needV = ($h -lt $FitMinContentHeight)
+    $vBar = 0.0; if ($needV) { $vBar = $barW }
+    $needH = (($w - $vBar) -lt $FitMinContentWidth)
+    if ($needH -and -not $needV) { $needV = (($h - $barH) -lt $FitMinContentHeight) }
+    $vBar = 0.0; if ($needV) { $vBar = $barW }
+    $hBar = 0.0; if ($needH) { $hBar = $barH }
+    # Barre decise qui (non "Auto"): con una griglia grande quanto l'area le barre automatiche possono restare bloccate.
+    if ($needV) { $sv.VerticalScrollBarVisibility = [System.Windows.Controls.ScrollBarVisibility]::Visible } else { $sv.VerticalScrollBarVisibility = [System.Windows.Controls.ScrollBarVisibility]::Hidden }
+    if ($needH) { $sv.HorizontalScrollBarVisibility = [System.Windows.Controls.ScrollBarVisibility]::Visible } else { $sv.HorizontalScrollBarVisibility = [System.Windows.Controls.ScrollBarVisibility]::Hidden }
+    $mH = [double]($g.Margin.Left + $g.Margin.Right)
+    $mV = [double]($g.Margin.Top + $g.Margin.Bottom)
+    $g.Width  = [Math]::Max($FitMinContentWidth,  $w - $vBar) - $mH
+    $g.Height = [Math]::Max($FitMinContentHeight, $h - $hBar) - $mV
+}
+
+# Riceve le dimensioni dell'area di lavoro (cosi si puo provare con valori finti).
+# Con -NoMaximize (solo per il banco di prova) la finestra non viene ingrandita davvero:
+# prende la dimensione dell'area di lavoro, da Normal.
+function Set-WindowFit {
+    param([double]$WorkWidth, [double]$WorkHeight, [switch]$NoMaximize)
+
+    $small   = (($WorkWidth -lt $FitNormalWidth) -or ($WorkHeight -lt $FitNormalHeight))
+    $compact = ($WorkHeight -lt $FitNormalHeight)
+
+    $Window.MinWidth  = [Math]::Min(900.0, $WorkWidth)
+    $Window.MinHeight = [Math]::Min(620.0, $WorkHeight)
+
+    $logH = 80.0
+    if ($WorkHeight -ge 700) { $logH = 140.0 }
+    $Ctrl.RootGrid.RowDefinitions[4].Height = [System.Windows.GridLength]::new($logH)
+
+    # Aspetto compatto quando l'altezza e poca: margini piu stretti, sottotitolo nascosto.
+    if ($compact) {
+        $Ctrl.RootGrid.Margin = [System.Windows.Thickness]::new(8)
+        $Ctrl.TxtSubtitle.Visibility = [System.Windows.Visibility]::Collapsed
+        $Ctrl.HeaderBorder.Padding = [System.Windows.Thickness]::new(14, 6, 14, 6)
+        $Ctrl.HeaderBorder.Margin = [System.Windows.Thickness]::new(0, 0, 0, 6)
+        $Ctrl.ProgressStep.Visibility = [System.Windows.Visibility]::Collapsed
+        $Ctrl.ProgressBorder.Padding = [System.Windows.Thickness]::new(12, 6, 12, 6)
+        $Ctrl.ProgressBorder.Margin = [System.Windows.Thickness]::new(0, 0, 0, 6)
+        $Ctrl.LogBorder.Margin = [System.Windows.Thickness]::new(0, 0, 0, 6)
+    } else {
+        $Ctrl.RootGrid.Margin = [System.Windows.Thickness]::new(16)
+        $Ctrl.TxtSubtitle.Visibility = [System.Windows.Visibility]::Visible
+        $Ctrl.HeaderBorder.Padding = [System.Windows.Thickness]::new(16, 12, 16, 12)
+        $Ctrl.HeaderBorder.Margin = [System.Windows.Thickness]::new(0, 0, 0, 10)
+        $Ctrl.ProgressStep.Visibility = [System.Windows.Visibility]::Visible
+        $Ctrl.ProgressBorder.Padding = [System.Windows.Thickness]::new(12, 10, 12, 10)
+        $Ctrl.ProgressBorder.Margin = [System.Windows.Thickness]::new(0, 0, 0, 10)
+        $Ctrl.LogBorder.Margin = [System.Windows.Thickness]::new(0, 0, 0, 10)
+    }
+
+    if ($small) {
+        if ($NoMaximize) {
+            $Window.WindowState = [System.Windows.WindowState]::Normal
+            $Window.Width  = $WorkWidth
+            $Window.Height = $WorkHeight
+        } else {
+            $Window.WindowState = [System.Windows.WindowState]::Maximized
+        }
+    } else {
+        $Window.WindowState = [System.Windows.WindowState]::Normal
+        $Window.Width  = $FitNormalWidth
+        $Window.Height = $FitNormalHeight
+    }
+    Update-RootSize
+    return [PSCustomObject]@{ Maximize = $small; Compact = $compact; LogHeight = $logH; MinWidth = $Window.MinWidth; MinHeight = $Window.MinHeight }
+}
+
+$Ctrl.RootScroll.Add_SizeChanged({ Update-RootSize })
+
+# ---------------------------------------------------------------------------
 # 8. Gestori pulsanti Toolbar
 # ---------------------------------------------------------------------------
 $Ctrl.BtnSelectAll.Add_Click({
@@ -1748,7 +2301,36 @@ $Ctrl.MainTabs.Add_SelectionChanged({
             [void](Invoke-TouchDiag)
         }
     }
+    if ($idx -eq 3) {
+        Update-BootInfo
+        if (-not $Sync.TweaksShown) {
+            $Sync.TweaksShown = $true
+            Update-TweakStates
+        }
+    }
 })
+
+$Ctrl.BtnBootApply.Add_Click({ Invoke-BootApply })
+$Ctrl.BtnTweakRecommended.Add_Click({
+    foreach ($i in $TweakItems) { $i.IsSelected = [bool]$i.Def.Recommended }
+    $Ctrl.GridTweaks.Items.Refresh()
+})
+$Ctrl.BtnTweakAll.Add_Click({
+    foreach ($i in $TweakItems) { $i.IsSelected = $true }
+    $Ctrl.GridTweaks.Items.Refresh()
+})
+$Ctrl.BtnTweakNone.Add_Click({
+    foreach ($i in $TweakItems) { $i.IsSelected = $false }
+    $Ctrl.GridTweaks.Items.Refresh()
+})
+$Ctrl.BtnTweakRefresh.Add_Click({ Update-TweakStates; Update-BootInfo })
+$Ctrl.BtnTweakUndo.Add_Click({ Invoke-Tweaks -On $false })
+$Ctrl.BtnOpenScale.Add_Click({ Open-SettingsPage 'ms-settings:display' })
+$Ctrl.BtnOpenTyping.Add_Click({ Open-SettingsPage 'ms-settings:typing' })
+$Ctrl.BtnOpenSignin.Add_Click({ Open-SettingsPage 'ms-settings:signinoptions' })
+$Ctrl.BtnOpenTouch.Add_Click({ Open-SettingsPage 'ms-settings:devices-touch' })
+$Ctrl.BtnOpenGaming.Add_Click({ Open-SettingsPage 'ms-settings:gaming-gamemode' })
+$Ctrl.BtnOpenWinUtil.Add_Click({ Open-WinUtil })
 
 $Ctrl.BtnCancel.Add_Click({
     if ($Sync.IsRunning) {
@@ -2027,6 +2609,7 @@ function Start-DriverInstall {
             $Sync.StepPct  = 0
 
             Log-Step "--- [$idx/$total] $($def.Name) ($($def.ZipName)) ---"
+            if ($item.SystemStatus -like 'Installato*') { Log-Step "AVVISO: $($def.Name): gia presente in versione uguale o piu recente: installazione richiesta comunque dall'utente." }
 
             try {
                 # 1. Acquisizione ZIP (locale o download)
@@ -2328,6 +2911,7 @@ $Ctrl.BtnInstall.Add_Click({
     switch ($Ctrl.MainTabs.SelectedIndex) {
         0 { Start-DriverInstall }
         1 { Start-AppInstall }
+        3 { Invoke-Tweaks -On $true }
         default { }
     }
 })
@@ -2337,6 +2921,10 @@ $Ctrl.MainTabs.SelectedIndex = 0
 Update-InstallButton
 Update-DisplayInfo
 Update-RotationLockInfo
+
+# Adatta la finestra all'area di lavoro reale (ingrandita se piu piccola di 1080x780).
+$wa = [System.Windows.SystemParameters]::WorkArea
+[void](Set-WindowFit -WorkWidth $wa.Width -WorkHeight $wa.Height)
 
 # Avvia finestra WPF
 $Window.Add_Closed({ $UiTimer.Stop() })

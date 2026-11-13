@@ -44,7 +44,9 @@ Gli archivi servono solo alla scheda **Driver**. I programmi della scheda **Gioc
 
 ## 3. Come usare l'interfaccia grafica
 
-La finestra ha tre schede, **Driver**, **Gioco** e **Schermo**. Intestazione, barre di avanzamento, log e pulsanti in basso sono comuni. Il pulsante principale cambia con la scheda: **`Installa Driver Selezionati`** nella scheda Driver, **`Installa Programmi Selezionati`** nella scheda Gioco, disattivato nella scheda Schermo. Mentre una coda è in corso non se ne può avviare un'altra e i pulsanti dei preset sono disattivati. **`Annulla`** ferma la coda corrente tra un elemento e l'altro.
+La finestra si adatta allo schermo: sugli schermi grandi è 1080x780; se l'area di lavoro è più piccola (sul 1S con scala 200-250% è circa 1280x752 o 1024x592, e in verticale prima del driver grafico circa 800x1232) parte ingrandita con un layout più compatto, e sotto 860x520 compaiono le barre di scorrimento della finestra. Le caselle **Sel.** delle tabelle cambiano al primo tocco.
+
+La finestra ha quattro schede, **Driver**, **Gioco**, **Schermo** e **Sistema**. Intestazione, barre di avanzamento, log e pulsanti in basso sono comuni. Il pulsante principale cambia con la scheda: **`Installa Driver Selezionati`** nella scheda Driver, **`Installa Programmi Selezionati`** nella scheda Gioco, disattivato nella scheda Schermo, **`Applica Ottimizzazioni Selezionate`** nella scheda Sistema. Mentre una coda è in corso non se ne può avviare un'altra e i pulsanti dei preset sono disattivati. **`Annulla`** ferma la coda corrente tra un elemento e l'altro.
 
 ### Scheda Driver
 
@@ -53,11 +55,13 @@ All'apertura, lo script analizza automaticamente il sistema (`Win32_PnPSignedDri
 - **`Non rilevato`**: driver non presente o non attivo sul sistema.
 - **`Errore dispositivo (!)`**: dispositivo presente e segnalato in errore in Gestione Dispositivi (non contano quelli scollegati né quelli disattivati a mano).
 - **`Aggiornabile (...)`**: versione installata più vecchia di quella nel pacchetto.
-- **`Installato (...)`**: versione uguale o più recente già presente.
+- **Installato (...)**: versione uguale o più recente già presente.
+
+All'apertura sono selezionati **solo i driver mancanti, in errore o più vecchi** (gli stessi di Solo Mancanti / Aggiornabili). Su un Windows appena installato risultano selezionati tutti; su un sistema già aggiornato i driver più recenti non vengono toccati, a meno di usare **Seleziona Tutti (13)**. Se avvii comunque l'installazione di un driver già presente in versione uguale o più recente, il log lo segnala con un avviso, ma l'installazione prosegue.
 
 #### Pulsanti rapidi (Toolbar)
 
-- **`Seleziona Tutti (13)`**: seleziona tutti i pacchetti per l'installazione sequenziale completa (utile su Windows appena formattato).
+- **`Seleziona Tutti (13)`**: seleziona tutti i pacchetti per l'installazione sequenziale completa (utile su Windows appena formattato; è anche il modo esplicito per reinstallare i driver già aggiornati).
 - **`Solo Mancanti / Aggiornabili`**: seleziona automaticamente solo ciò che manca, ha errori o ha versione più vecchia.
 - **`Solo Essenziali (Core + Rete + GPU)`**: seleziona Chipset, Serial IO, Management Engine, DTT, Iris Xe Graphics, Wi-Fi e Bluetooth.
 - **`Deseleziona Tutto`**: svuota la selezione per scegliere manualmente singoli driver.
@@ -79,15 +83,24 @@ All'apertura, lo script analizza automaticamente il sistema (`Win32_PnPSignedDri
 
 ### Scheda Gioco
 
-Elenca 23 programmi con categoria, a cosa servono, stato sul PC e avanzamento. Lo stato si legge in background la prima volta che apri la scheda (circa 30 secondi, con `winget export`; Intel Graphics Command Center si controlla come app dello Store), con **`Aggiorna stato`** e alla fine di ogni installazione. Valori: `Analisi...`, `Installato`, `Non installato`, `winget assente`.
+Elenca 25 programmi con categoria, a cosa servono, stato sul PC e avanzamento. Lo stato si legge in background la prima volta che apri la scheda (circa 30 secondi, con `winget export`; Intel Graphics Command Center si controlla come app dello Store), con **`Aggiorna stato`** e alla fine di ogni installazione. Valori: `Analisi...`, `Installato`, `Non installato`, `winget assente`.
 
-- **`Consigliati`**: seleziona i programmi marcati come consigliati (sono anche quelli selezionati all'avvio): Visual C++ 2015-2022 (x64 e x86), DirectX End-User Runtime, .NET Desktop Runtime 8, Intel Driver & Support Assistant, Intel Graphics Command Center, Steam, Playnite, RivaTuner Statistics Server e 7-Zip.
+- **`Consigliati`**: seleziona i programmi marcati come consigliati (sono anche quelli selezionati all'avvio): Visual C++ 2015-2022 (x64 e x86), DirectX End-User Runtime, .NET Desktop Runtime 8, Intel Driver & Support Assistant, Intel Graphics Command Center, Steam, Playnite, RivaTuner Statistics Server, 7-Zip e DiskInternals Linux Reader.
 - **`Tutti`** / **`Nessuno`**: seleziona o svuota l'intero elenco.
-- Gli altri programmi (Heroic, GOG Galaxy, Epic, EA app, Ubisoft Connect, MSI Afterburner, HWiNFO, Handheld Companion, ThrottleStop, GeForce NOW, Moonlight, RetroArch, PCSX2) sono facoltativi. Handheld Companion non elenca il 1S tra i dispositivi supportati: da provare. ThrottleStop va regolato a mano con cautela.
+- Gli altri programmi (Heroic, GOG Galaxy, Epic, EA app, Ubisoft Connect, MSI Afterburner, HWiNFO, Handheld Companion, ThrottleStop, GeForce NOW, Moonlight, RetroArch, PCSX2, WinBtrfs) sono facoltativi. Handheld Companion non elenca il 1S tra i dispositivi supportati: da provare. ThrottleStop va regolato a mano con cautela.
 
 Premendo **`Installa Programmi Selezionati`** i programmi vengono installati uno alla volta, in ordine, con `winget install --exact --silent`. Se `winget` non c'è, la coda non parte: aggiorna «Programma di installazione app» dal Microsoft Store (sulle edizioni LTSC winget non è incluso e va installato a parte). Un errore su una voce non ferma le altre: nel log compaiono il codice di uscita e le ultime righe dell'output. Al termine appare un riepilogo (completati, errori, percorso del log), **senza richiesta di riavvio**.
 
 **Grafica aggiornata:** il driver Iris Xe della scheda Driver è quello del produttore. Per tenere aggiornati grafica, Wi-Fi e Bluetooth alle versioni Intel correnti installa **Intel Driver & Support Assistant** da questa scheda.
+
+### Leggere dischi formattati da Linux
+
+Per aprire da Windows un disco o una scheda SD usati con Linux (per esempio con Bazzite):
+
+- **ext4**: **DiskInternals Linux Reader** (scheda Gioco) è in sola lettura: si aprono i file e si copiano su Windows, senza scrivere sul disco.
+- **btrfs** (formato predefinito di Bazzite, anche per le schede SD formattate da Bazzite): **WinBtrfs** monta il disco con una lettera di unità e permette anche di scrivere, quindi usalo con prudenza.
+- **Alternativa di Microsoft per ext4** su dischi interni o USB fissi: da PowerShell come amministratore `wsl --install`, poi `wsl --mount \\.\PHYSICALDRIVE<n> --partition <p>` (il numero del disco si legge con `Get-Disk`); i file compaiono sotto `\\wsl$`. Non funziona con schede SD e chiavette rimovibili.
+- **Non usare «Inizializza» o «Formatta»** quando Windows lo propone per un disco Linux: cancellerebbe i dati.
 
 ### Scheda Schermo
 
@@ -98,6 +111,33 @@ In alto vedi risoluzione, orientamento (0, 90, 180, 270 gradi) e frequenza attua
 - **Risoluzione**: `Nativa`, `1920 x 1200`, `1280 x 800`. 1280 x 800 è la metà esatta della risoluzione nativa: con la scalatura a numeri interi di Intel Graphics Command Center resta nitida e i giochi girano molto più leggeri. Se il driver video non elenca la modalità richiesta (succede con il driver video di base, prima di installare il driver Iris Xe) non viene cambiato nulla e il log lo segnala.
 - **Conferma a 15 secondi**: dopo ogni cambio compare «Mantenere questa impostazione dello schermo?». Se non rispondi **Sì** entro 15 secondi (o rispondi No) lo schermo torna da solo alle impostazioni di prima.
 - **Touch**: `Diagnosi touch` controlla controller Intel Serial IO, dispositivi HID su I2C e touch screen e scrive nel log l'elenco dei dispositivi e l'esito. `Ripara touch` riattiva il touch se disattivato, riavvia i dispositivi HID su I2C e riesegue la scansione; se manca Serial IO propone di selezionare solo quel driver nella scheda Driver. La diagnosi parte anche alla prima apertura della scheda.
+
+### Scheda Sistema
+
+**Avvio del dispositivo.** Tre scelte: `Desktop normale`, `Steam Big Picture` e `Playnite a schermo intero`; con `Applica avvio` la scelta vale dal prossimo accesso.
+
+- È un avvio automatico **all'accesso, sopra il desktop normale**, non una sostituzione della shell: l'utility scrive solo il valore `OXP1S-AvvioGioco` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, quindi vale per l'utente che ha avviato l'utility. Explorer resta la shell di Windows (niente Shell Launcher, nessuna modifica a Winlogon): uscendo da Big Picture o da Playnite si torna al desktop.
+- Steam parte con `steam.exe -gamepadui`; Playnite con `Playnite.FullscreenApp.exe`. I percorsi si leggono dal registro e dalle cartelle di installazione. Se il programma non è installato non viene scritto nulla e la riga di stato dice di installarlo dalla scheda Gioco.
+- Steam di solito ha un proprio valore `Steam` in `Run` (avvio silenzioso): due avvii insieme si ostacolano. Scegliendo Steam Big Picture quel valore viene messo da parte in `HKCU\Software\OXP1S-Utility` (`SteamRunBackup`) e tolto da `Run`; passando a un'altra modalità viene rimesso. Se Steam lo ricrea da solo (opzione «Esegui Steam all'avvio del computer»), ripeti `Applica avvio`.
+- `Desktop normale` toglie `OXP1S-AvvioGioco`. La riga di stato mostra la modalità attuale e il rilevamento di Steam e Playnite.
+
+**Ottimizzazioni.** Elenco con **Stato attuale** (`Attiva`, `Non attiva`, `Non determinato`). `Consigliate` seleziona le voci raccomandate (sono quelle selezionate all'apertura), `Tutte` e `Nessuna` selezionano o svuotano, `Aggiorna stato` rilegge. Il pulsante in basso **`Applica Ottimizzazioni Selezionate`** applica le voci selezionate; **`Ripristina selezionate`** le riporta allo stato precedente. Ogni scrittura finisce nel log.
+
+| Regolazione | Consigliata | Cosa scrive |
+|---|---|---|
+| Tastiera touch sempre disponibile | sì | `HKCU\Software\Microsoft\TabletTip\1.7`, `TouchKeyboardTapInvoke` = 2 (ripristino 1) |
+| Caselle di selezione in Esplora file | sì | `...\Explorer\Advanced`, `AutoCheckSelect` = 1 (ripristino 0) |
+| Spaziatura larga in Esplora file | sì | `...\Explorer\Advanced`, `UseCompactMode` = 0 (ripristino 1) |
+| Disattiva i gesti dai bordi dello schermo | no | `HKLM\SOFTWARE\Policies\Microsoft\Windows\EdgeUI`, `AllowEdgeSwipe` = 0 (ripristino: valore cancellato) |
+| Modalità Gioco di Windows | sì | `HKCU\Software\Microsoft\GameBar`, `AutoGameModeEnabled` = 1 (ripristino 0) |
+| Tasto di accensione: ibernazione invece di sospensione | sì | `powercfg /hibernate on` e azione del tasto = 2 (ibernazione) in rete e a batteria; ripristino: azione = 1 (sospensione), l'ibernazione resta attiva |
+| Avvio dei programmi senza attesa dopo l'accesso | no | `...\Explorer\Serialize`, `StartupDelayInMSec` = 0 (ripristino: valore cancellato) |
+
+Le voci su Esplora file hanno effetto riaprendo Esplora file; i gesti dai bordi richiedono di uscire e rientrare in Windows.
+
+**Impostazioni di Windows.** Cinque pulsanti aprono soltanto la pagina giusta (`Scala dello schermo`, `Tastiera touch`, `Accesso con impronta o PIN`, `Gesti touch`, `Modalità Gioco`): sul 1S conviene una scala dello schermo del 200-250%. `Apri WinUtil (pulizia di Windows)` chiede prima conferma, poi scarica ed esegue lo strumento di Chris Titus da `christitus.com/win` in una nuova finestra di PowerShell.
+
+**Non provato sul dispositivo.** Il valore della tastiera touch (`TouchKeyboardTapInvoke = 2`) e l'opzione `-gamepadui` di Steam non sono stati provati sul 1S. Per verificarli: per la tastiera apri *Impostazioni > Data/ora e lingua > Digitazione > Tastiera touch* e controlla la voce di comparsa della tastiera quando non c'è una tastiera collegata; per Steam, se `-gamepadui` non porta a Big Picture, in Steam usa *Impostazioni > Interfaccia > «Avvia Steam in modalità Big Picture»* come alternativa (e scegli `Desktop normale` qui).
 
 ### Schermo capovolto e touch che non funziona dopo un'installazione pulita
 

@@ -1,10 +1,11 @@
 # OneXPlayer 1S — Utility (Windows 11)
 
-Utility grafica WPF in PowerShell ispirata a **Chris Titus WinUtil** per il **OneXPlayer 1S** su **Windows 11**. Tre schede:
+Utility grafica WPF in PowerShell ispirata a **Chris Titus WinUtil** per il **OneXPlayer 1S** su **Windows 11**. Quattro schede:
 
 - **Driver**: scarica e installa in sequenza silenziosa i 13 driver del 1S.
 - **Gioco**: installa con winget i programmi utili per giocare (librerie, negozi, strumenti per le prestazioni, streaming, emulatori).
 - **Schermo**: orientamento, blocco della rotazione automatica, risoluzione e diagnosi del touch.
+- **Sistema**: avvio del dispositivo (desktop, Steam Big Picture o Playnite), ottimizzazioni per touch e gioco, collegamenti alle Impostazioni di Windows.
 
 ## Avvio rapido (stile WinUtil)
 
@@ -32,11 +33,12 @@ La scheda Gioco e i comandi della scheda Schermo non usano gli archivi: i progra
 
 ## Caratteristiche
 
-- **Interfaccia WPF scura in Italiano** con tre schede (Driver, Gioco, Schermo), barre di avanzamento e log in tempo reale comuni.
-- **Scheda Driver**: selezione singola o tramite preset (`Seleziona Tutti`, `Solo Mancanti / Aggiornabili`, `Solo Essenziali`), rilevamento automatico dei driver già installati e dei dispositivi con errori, Punto di Ripristino automatico (disattivabile), installazione 100% silenziosa in ordine di dipendenza e **riavvio unico finale**.
-- **Scheda Gioco**: 23 programmi con categoria, descrizione e stato sul PC (rilevato in background, circa 30 secondi); preset `Consigliati`, `Tutti`, `Nessuno`; installazione con `winget` una voce alla volta.
+- **Interfaccia WPF scura in Italiano** con quattro schede (Driver, Gioco, Schermo, Sistema), barre di avanzamento e log in tempo reale comuni.
+- **Scheda Driver**: all'apertura sono selezionati solo i driver mancanti, in errore o più vecchi (Seleziona Tutti li include tutti); selezione singola o tramite preset (`Seleziona Tutti`, `Solo Mancanti / Aggiornabili`, `Solo Essenziali`), rilevamento automatico dei driver già installati e dei dispositivi con errori, Punto di Ripristino automatico (disattivabile), installazione 100% silenziosa in ordine di dipendenza e **riavvio unico finale**.
+- **Scheda Gioco**: 25 programmi con categoria, descrizione e stato sul PC (rilevato in background, circa 30 secondi); preset `Consigliati`, `Tutti`, `Nessuno`; installazione con `winget` una voce alla volta.
 - **Scheda Schermo**: rotazioni relative (90, 180, 270 gradi), blocco/sblocco della rotazione automatica, risoluzione `Nativa` / `1920 x 1200` / `1280 x 800`, diagnosi e riparazione del touch. **Ogni cambio di schermo chiede conferma per 15 secondi** e, se non rispondi Sì, torna da solo allo stato precedente.
-- Il pulsante in basso cambia con la scheda: «Installa Driver Selezionati» (Driver), «Installa Programmi Selezionati» (Gioco), disattivato (Schermo). `Annulla` ferma la coda in corso tra un elemento e l'altro.
+- **Finestra adattiva**: 1080x780 centrata sugli schermi grandi; se l'area di lavoro è più piccola (per esempio 1280x752, 1024x592 o schermo in verticale prima di installare il driver grafico) parte ingrandita, con un layout più compatto e barre di scorrimento sotto 860x520, così il pulsante in fondo resta sempre raggiungibile. Le caselle Sel. cambiano al primo tocco.
+- Il pulsante in basso cambia con la scheda: «Installa Driver Selezionati» (Driver), «Installa Programmi Selezionati» (Gioco), disattivato (Schermo), «Applica Ottimizzazioni Selezionate» (Sistema). `Annulla` ferma la coda in corso tra un elemento e l'altro.
 
 ## Driver inclusi (in ordine sequenziale)
 
@@ -73,6 +75,7 @@ I programmi marcati **(C)** sono quelli selezionati con il preset `Consigliati` 
 | Streaming | GeForce NOW, Moonlight |
 | Emulazione | RetroArch, PCSX2 |
 | Utilità | 7-Zip **(C)** |
+| Dischi Linux | DiskInternals Linux Reader **(C)** (ext2/ext3/ext4 in sola lettura), WinBtrfs (dischi btrfs, anche in scrittura: da usare con prudenza) |
 
 Lo stato («Installato» / «Non installato») viene letto con `winget export` (voci winget) e `Get-AppxPackage` (Intel Graphics Command Center). Se `winget` manca, la coda non parte: aggiorna «Programma di installazione app» dal Microsoft Store (sulle edizioni LTSC winget non è incluso e va installato a parte). Al termine della coda compare un riepilogo, senza richiesta di riavvio.
 
@@ -83,6 +86,23 @@ Lo stato («Installato» / «Non installato») viene letto con `winget export` (
 - **Risoluzione**: `Nativa`, `1920 x 1200`, `1280 x 800`. 1280 x 800 è la metà esatta della nativa: con la scalatura a numeri interi di Intel Graphics Command Center resta nitida e i giochi girano molto più leggeri. Se il driver video non elenca la modalità richiesta (succede con il driver di base) non viene applicato nulla.
 - **Conferma**: ogni cambio chiede «Mantenere questa impostazione dello schermo?» per 15 secondi; senza Sì torna allo stato precedente.
 - **Touch**: `Diagnosi touch` controlla Intel Serial IO, i dispositivi HID su I2C e il touch screen e scrive l'esito; `Ripara touch` riattiva e riavvia i dispositivi coinvolti. Se manca Serial IO propone di selezionare solo quel driver nella scheda Driver.
+
+## Scheda Sistema
+
+- **Avvio del dispositivo**: `Desktop normale`, `Steam Big Picture` (`steam.exe -gamepadui`) o `Playnite a schermo intero` (`Playnite.FullscreenApp.exe`). È un **avvio automatico all'accesso, sopra il desktop normale**: si scrive il valore `OXP1S-AvvioGioco` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, quindi vale per l'utente che avvia l'utility. Explorer resta la shell di Windows (nessun Shell Launcher, nessuna modifica a Winlogon): uscendo da Big Picture o da Playnite si torna al desktop. Se il programma scelto non è installato non viene scritto nulla e la riga di stato rimanda alla scheda Gioco. Con Steam Big Picture il valore `Steam` di `Run` (avvio silenzioso di Steam), se c'è, viene messo da parte in `HKCU\Software\OXP1S-Utility` e rimesso al cambio di modalità.
+- **Ottimizzazioni**: elenco con stato attuale (`Attiva` / `Non attiva` / `Non determinato`), preset `Consigliate`, `Tutte`, `Nessuna`, `Aggiorna stato`; il pulsante in basso applica le voci selezionate e `Ripristina selezionate` le riporta allo stato precedente. Le **consigliate** sono marcate **(C)**.
+
+| Regolazione | Categoria | Cosa fa |
+|---|---|---|
+| Tastiera touch sempre disponibile **(C)** | Touch | Il controller integrato può risultare come tastiera collegata e impedire alla tastiera a schermo di comparire |
+| Caselle di selezione in Esplora file **(C)** | Touch | Una casella accanto a ogni file per selezionarlo col tocco (riaprire Esplora file) |
+| Spaziatura larga in Esplora file **(C)** | Touch | Elementi più distanziati, più facili da toccare (riaprire Esplora file) |
+| Disattiva i gesti dai bordi dello schermo | Touch | Evita di aprire widget e notifiche per sbaglio mentre si gioca (serve un nuovo accesso) |
+| Modalità Gioco di Windows **(C)** | Gioco | Dà priorità al gioco in primo piano |
+| Tasto di accensione: ibernazione invece di sospensione **(C)** | Gioco | La sospensione moderna consuma batteria nello zaino (`powercfg`) |
+| Avvio dei programmi senza attesa dopo l'accesso | Gioco | Può ridurre l'attesa prima che parta il programma scelto per l'avvio |
+
+- **Impostazioni di Windows**: pulsanti che aprono la pagina giusta (scala dello schermo, tastiera touch, accesso con impronta o PIN, gesti touch, Modalità Gioco) e `Apri WinUtil (pulizia di Windows)`, che prima chiede conferma e poi scarica ed esegue lo strumento di Chris Titus da `christitus.com/win`.
 
 ## Pubblicazione su GitHub Releases
 
