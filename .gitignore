@@ -8,3 +8,6 @@ temp/
 tmp/
 .DS_Store
 Thumbs.db
+
+# Appunti di ripartenza locali
+STATO.md
