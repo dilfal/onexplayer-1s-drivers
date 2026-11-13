@@ -53,31 +53,23 @@ if (-not (Test-Path (Join-Path $PSScriptRoot ".git"))) {
     git commit -m "Initial commit: OneXPlayer 1S Driver Utility (Win11 Pro)"
 }
 
-$repoExists = $false
-try {
-    gh repo view $RepoName | Out-Null
-    $repoExists = $true
-} catch {
-    $repoExists = $false
-}
+gh repo view $RepoName 2>$null | Out-Null
+$repoExists = ($LASTEXITCODE -eq 0)
 
 if (-not $repoExists) {
     Write-Host "Creazione repository pubblico $RepoName su GitHub..." -ForegroundColor Cyan
     gh repo create $RepoName --public --source . --remote origin --push
+    if ($LASTEXITCODE -ne 0) { throw "Errore creazione repo $RepoName" }
 } else {
     Write-Host "Repository $RepoName gia esistente. Push su origin/main..." -ForegroundColor Cyan
     git push -u origin main
+    if ($LASTEXITCODE -ne 0) { throw "Errore push su $RepoName" }
 }
 
 $zipPaths = $RequiredZips | ForEach-Object { Join-Path $DriversSourceDir $_ }
 
-$releaseExists = $false
-try {
-    gh release view $ReleaseTag --repo $RepoName | Out-Null
-    $releaseExists = $true
-} catch {
-    $releaseExists = $false
-}
+gh release view $ReleaseTag --repo $RepoName 2>$null | Out-Null
+$releaseExists = ($LASTEXITCODE -eq 0)
 
 if (-not $releaseExists) {
     Write-Host "Creazione Release $ReleaseTag e upload dei 12 pacchetti driver (~1,34 GB)..." -ForegroundColor Green
@@ -85,9 +77,11 @@ if (-not $releaseExists) {
         --repo $RepoName `
         --title "OneXPlayer 1S Drivers ($ReleaseTag)" `
         --notes "Pacchetti driver ufficiali per OneXPlayer 1S (Windows 11 Pro) usati da oxp1s.ps1."
+    if ($LASTEXITCODE -ne 0) { throw "Errore creazione release $ReleaseTag" }
 } else {
     Write-Host "Release $ReleaseTag gia presente. Upload/aggiornamento asset..." -ForegroundColor Green
     gh release upload $ReleaseTag @zipPaths --repo $RepoName --clobber
+    if ($LASTEXITCODE -ne 0) { throw "Errore upload asset su $ReleaseTag" }
 }
 
 Write-Host ""
